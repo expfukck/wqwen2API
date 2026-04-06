@@ -1,9 +1,9 @@
 import requests
 import json
 
-with open('accounts.json', 'r') as f:
+with open('data/accounts.json', 'r') as f:
     accs = json.load(f)
-token = list(accs.values())[0]['token']
+token = accs[0]['token']
 print(f"Token: {token[:20]}...")
 
 resp = requests.get(
