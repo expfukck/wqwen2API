@@ -339,7 +339,7 @@ async def activate_account(acc: Account) -> bool:
     """Open mail.chatgpt.org.uk/{email} in browser, find the Qwen activation link,
     click it, then login to get a fresh token. Returns True on success."""
     log.info(f"[Activate] 开始激活 {acc.email}，打开邮箱页面...")
-    keywords = ("qwen", "verify", "activate", "confirm", "aliyun", "alibaba", "qwenlm")
+    keywords = ("qwen", "verify", "activate", "confirm", "aliyun", "alibaba", "qwenlm", "active mail")
     mail_url = f"{MAIL_BASE}/{acc.email}"
     try:
         async with _new_browser() as browser:
@@ -413,7 +413,7 @@ async def activate_account(acc: Account) -> bool:
 
             # Step 3: Extract activation link — email body is inside #emailFrame iframe
             js_find_link = """() => {
-                const kws = ['qwen', 'verify', 'activate', 'confirm', 'aliyun', 'alibaba', 'qwenlm'];
+                const kws = ['qwen', 'verify', 'activate', 'confirm', 'aliyun', 'alibaba', 'qwenlm', 'active mail'];
                 const links = Array.from(document.querySelectorAll('a[href]'));
                 for (const a of links) {
                     const href = a.href || '';
