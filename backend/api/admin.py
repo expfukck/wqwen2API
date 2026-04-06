@@ -105,61 +105,63 @@ async def register_new_account(request: Request):
 
 @router.post("/verify", dependencies=[Depends(verify_admin)])
 async def verify_all_accounts(request: Request):
-    """批量验活所有账号"""
+    """验证所有账号的有效性"""
     from backend.core.account_pool import AccountPool
-    from backend.services.qwen_client import client
-    
+    from backend.services.qwen_client import QwenClient
     pool: AccountPool = request.app.state.account_pool
-    results = []
+    client: QwenClient = request.app.state.qwen_client
+    
     for acc in pool.accounts:
-        valid = await client.verify_token(acc.token)
-        acc.valid = valid
-        results.append({"email": acc.email, "valid": valid})
-    pool._save_to_disk()
-    return {"ok": True, "results": results}
+        is_valid = await client.verify_account(acc)
+        if not is_valid:
+            pool.mark_invalid(acc)
+            
+    return {"ok": True, "message": "All accounts verified"}
 
 @router.post("/accounts/{email}/activate", dependencies=[Depends(verify_admin)])
-async def activate_account_route(email: str, request: Request):
-    """点击临时邮箱的激活链接"""
+async def activate_account(email: str, request: Request):
+    """单独激活某个账号"""
+    from backend.services.auth_resolver import activate_account as activate_logic
     from backend.core.account_pool import AccountPool
-    from backend.services.auth_resolver import activate_account
+    import asyncio
     
     pool: AccountPool = request.app.state.account_pool
     acc = next((a for a in pool.accounts if a.email == email), None)
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
         
+    # 防止并发点击：检查一个运行时标志
+    if getattr(acc, "_is_activating", False):
+        return {"ok": False, "error": "该账号正在激活中，请勿重复点击"}
+        
     try:
-        ok = await activate_account(acc)
-        return {"ok": ok, "email": acc.email, "message": "激活成功" if ok else "未能找到激活链接或获取Token"}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+        setattr(acc, "_is_activating", True)
+        success = await activate_logic(acc)
+        if success:
+            acc.valid = True
+            await pool.add(acc) # 这会触发覆盖保存
+            return {"ok": True, "message": "Account activated successfully"}
+        return {"ok": False, "error": "未能找到激活链接或获取Token"}
+    finally:
+        setattr(acc, "_is_activating", False)
 
 @router.post("/accounts/{email}/verify", dependencies=[Depends(verify_admin)])
 async def verify_account(email: str, request: Request):
-    """强制验活或尝试刷新指定账号的 Token"""
+    """单独验证某个账号的有效性"""
+    from backend.services.qwen_client import QwenClient
     from backend.core.account_pool import AccountPool
-    from backend.services.qwen_client import client
-    from backend.services.auth_resolver import get_fresh_token
     
     pool: AccountPool = request.app.state.account_pool
+    client: QwenClient = request.app.state.qwen_client
+    
     acc = next((a for a in pool.accounts if a.email == email), None)
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
         
-    valid = await client.verify_token(acc.token)
-    if not valid and acc.password:
-        try:
-            new_token = await get_fresh_token(acc.email, acc.password)
-            if new_token:
-                acc.token = new_token
-                valid = await client.verify_token(new_token)
-        except Exception as e:
-            pass
-            
-    acc.valid = valid
-    pool._save_to_disk()
-    return {"ok": True, "email": acc.email, "valid": valid}
+    is_valid = await client.verify_account(acc)
+    acc.valid = is_valid
+    await pool.add(acc) # 保存状态
+    return {"ok": True, "valid": is_valid}
 
 @router.delete("/accounts/{email}", dependencies=[Depends(verify_admin)])
 async def delete_account(email: str, request: Request):
