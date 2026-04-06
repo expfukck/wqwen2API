@@ -249,14 +249,22 @@ async def register_qwen_account() -> Optional[Account]:
             await asyncio.sleep(1)
             submit = await page.query_selector('button:has-text("Create Account")') or await page.query_selector('button[type="submit"]')
             if submit: await submit.click()
+            log.info("[Register] [4/7] 已点击提交，等待页面跳转（6s）...")
             await asyncio.sleep(6)
 
             url_after = page.url
+            log.info(f"[Register] [4/7] 提交后URL: {url_after}")
+
+            # Check if already logged in (redirected to main page)
             token = None
             if BASE_URL in url_after and "auth" not in url_after:
+                log.info("[Register] [5/7] 已跳转主页，尝试直接获取token...")
                 await asyncio.sleep(3)
                 token = await page.evaluate("localStorage.getItem('token')")
+                if token:
+                    log.info("[Register] [5/7] ✓ 注册后直接获取到token，跳过邮件验证")
 
+            # If no token yet, try explicit login with email+password (faster than email poll)
             if not token:
                 log.info("[Register] [5/7] 尝试用账号密码直接登录...")
                 try:
@@ -270,9 +278,12 @@ async def register_qwen_account() -> Optional[Account]:
                     if li_btn: await li_btn.click()
                     await asyncio.sleep(8)
                     token = await page.evaluate("localStorage.getItem('token')")
+                    if token:
+                        log.info("[Register] [5/7] ✓ 直接登录成功，获取到token")
                 except Exception as e:
-                    pass
+                    log.warning(f"[Register] [5/7] 直接登录失败: {e}")
 
+            # If still no token, poll email for verification link
             if not token:
                 log.info("[Register] [6/7] 等待验证邮件（最多5分钟）...")
                 verify_link = await mail_client.get_verify_link(timeout_sec=300)
@@ -281,13 +292,17 @@ async def register_qwen_account() -> Optional[Account]:
                     log.error("[Register] [6/7] 未收到验证邮件，注册失败")
                     return None
 
+                log.info(f"[Register] [6/7] ✓ 收到验证链接，访问中...")
                 try:
                     await page.goto(verify_link, wait_until="domcontentloaded", timeout=30000)
                 except Exception: pass
                 await asyncio.sleep(6)
                 token = await page.evaluate("localStorage.getItem('token')")
+                log.info(f"[Register] [6/7] 验证后URL: {page.url}")
 
+                # Login after verification
                 if not token:
+                    log.info("[Register] [6/7] 验证链接后尝试登录...")
                     try:
                         await page.goto(f"{BASE_URL}/auth", wait_until="domcontentloaded", timeout=30000)
                         await asyncio.sleep(3)
@@ -299,6 +314,8 @@ async def register_qwen_account() -> Optional[Account]:
                         if li_btn: await li_btn.click()
                         await asyncio.sleep(8)
                         token = await page.evaluate("localStorage.getItem('token')")
+                        if token:
+                            log.info("[Register] [6/7] ✓ 验证后登录成功")
                     except Exception: pass
 
             if not token:
