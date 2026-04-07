@@ -154,7 +154,14 @@ export default function AccountsPage() {
       </div>
 
       <div className="flex flex-col gap-4 bg-card p-4 rounded-xl border">
-        <h3 className="text-sm font-semibold">手动添加账号</h3>
+        <div>
+          <h3 className="text-sm font-semibold mb-1">手动添加账号</h3>
+          <p className="text-xs text-muted-foreground">
+            获取 Token 方法：打开 <a href="https://chat.qwen.ai" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">chat.qwen.ai</a> 登录后，
+            按 <kbd className="bg-muted px-1 rounded border">F12</kbd> → Application → Local Storage → <code className="text-green-500 bg-muted/50 px-1 rounded">token</code>，
+            复制其值粘贴到下方。
+          </p>
+        </div>
         <div className="flex gap-4 items-end">
           <div className="flex-1">
             <label className="text-xs font-medium mb-1 block text-muted-foreground">Token (必填)</label>
