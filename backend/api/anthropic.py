@@ -238,9 +238,7 @@ async def anthropic_messages(request: Request):
                                 import asyncio
                                 asyncio.create_task(client.delete_chat(acc.token, chat_id))
                         if acc: excluded_accounts.add(acc.email)
-                        log.warning(f"[NativeBlock-ANT] Qwen???????? '{blocked_name}'??????????????? (attempt {stream_attempt+1}/{max_attempts})")
-                        current_prompt = inject_format_reminder(current_prompt, blocked_name)
-                        await asyncio.sleep(0.15)
+                        log.warning(f"[NativeBlock-ANT] Qwen拦截了工具 '{blocked_name}' 的原生调用，注入格式纠正后重试 (attempt {stream_attempt+1}/{max_attempts})")
                         current_prompt = inject_format_reminder(current_prompt, blocked_name)
                         await asyncio.sleep(0.15)
                         continue
@@ -294,7 +292,7 @@ async def anthropic_messages(request: Request):
                                     current_prompt = current_prompt[:-len("Assistant:")] + force_text + "\nAssistant:"
                                 else:
                                     current_prompt += "\n\n" + force_text + "\nAssistant:"
-                                log.warning(f"[ToolLoop-ANT] ?? {n} ??????2??????????????? (attempt {stream_attempt+1}/{max_attempts})")
+                                log.warning(f"[ToolLoop-ANT] 工具 {n} 连续调用≥2次，强制切换工具 (attempt {stream_attempt+1}/{max_attempts})")
                                 await asyncio.sleep(0.15)
                                 continue
                     if stop_reason != "tool_use" and not answer_text.strip() and stream_attempt < max_attempts - 1:
@@ -317,7 +315,7 @@ async def anthropic_messages(request: Request):
                                 "Choose the best tool from the provided list by yourself. "
                                 "Do not answer in plain text.\nAssistant:"
                             )
-                        log.warning(f"[ToolParse-ANT] ???????????????????? (attempt {stream_attempt+1}/{max_attempts})")
+                        log.warning(f"[ToolParse-ANT] 模型返回空响应或无工具调用，重试 (attempt {stream_attempt+1}/{max_attempts})")
                         await asyncio.sleep(0.15)
                         continue
                 else:
@@ -446,7 +444,7 @@ async def anthropic_messages(request: Request):
                                 import asyncio
                                 asyncio.create_task(client.delete_chat(acc.token, chat_id))
                         if acc: excluded_accounts.add(acc.email)
-                        log.warning(f"[NativeBlock-ANT] Qwen???????? '{blocked_name}'??????????????? (attempt {stream_attempt+1}/{max_attempts})")
+                        log.warning(f"[NativeBlock-ANT] Qwen拦截了工具 '{blocked_name}' 的原生调用，注入格式纠正后重试 (attempt {stream_attempt+1}/{max_attempts})")
                         current_prompt = inject_format_reminder(current_prompt, blocked_name)
                         await asyncio.sleep(0.15)
                         continue
@@ -501,7 +499,7 @@ async def anthropic_messages(request: Request):
                                 else:
                                     current_prompt += "\n\n" + force_text + "\nAssistant:"
                                 if acc: excluded_accounts.add(acc.email)
-                                log.warning(f"[ToolLoop-ANT] ?? {n} ??????2??????????????? (attempt {stream_attempt+1}/{max_attempts})")
+                                log.warning(f"[ToolLoop-ANT] 工具 {n} 连续调用≥2次，强制切换工具 (attempt {stream_attempt+1}/{max_attempts})")
                                 await asyncio.sleep(0.15)
                                 continue
                         if acc:
@@ -523,7 +521,7 @@ async def anthropic_messages(request: Request):
                                 "Choose the best tool from the provided list by yourself. "
                                 "Do not answer in plain text.\nAssistant:"
                             )
-                        log.warning(f"[ToolParse-ANT] ???????????????????? (attempt {stream_attempt+1}/{max_attempts})")
+                        log.warning(f"[ToolParse-ANT] 模型返回空响应或无工具调用，重试 (attempt {stream_attempt+1}/{max_attempts})")
                         await asyncio.sleep(0.15)
                         continue
                 else:

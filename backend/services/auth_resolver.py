@@ -372,18 +372,18 @@ class _EmailSession:
                     if data.get("auth"):
                         self._set_auth(data.get("auth", {}))
                     emails_list = data.get("data", {}).get("emails", [])
-                    log.info(f"[??] ? {attempt} ????????{len(emails_list)}")
+                    log.info(f"[邮件] 第 {attempt} 次轮询，收到 {len(emails_list)} 封邮件")
                     for msg in emails_list:
                         link = self._extract_verify_link_from_email_record(msg)
                         if link:
-                            log.info(f"[??] ????????{link[:160]}...")
+                            log.info(f"[邮件] 找到验证链接：{link[:160]}...")
                             return link
                 else:
                     log.warning(f"[MailSession] email API HTTP {resp.status_code}: {resp.text[:120]}")
             except Exception as e:
                 log.warning(f"[MailSession] poll error: {e}")
             time.sleep(2)
-        log.error("[??] ??????????")
+        log.error("[邮件] 轮询超时，未找到验证邮件")
         return ""
 
 class _AsyncMailClient:
@@ -513,7 +513,7 @@ async def register_qwen_account() -> Optional[Account]:
                     log.info(f"[Register] [6/7] polling mailbox email API for {email}...")
                     verify_link = await mail_client.get_verify_link(timeout_sec=60)
                     if not verify_link:
-                        log.info(f"[??] [6/7] ?? API ?????????????{email}")
+                        log.info(f"[注册] [6/7] 邮件 API 未返回链接，尝试页面方式 {email}")
                         verify_link = await _find_verify_link_via_mail_page(email)
 
                     if not verify_link:
@@ -667,12 +667,12 @@ async def activate_account(acc: Account) -> bool:
     started_at = float(getattr(acc, "_activation_started_at", 0) or 0)
     if getattr(acc, "_is_activating", False):
         if started_at and (time.time() - started_at) < 90:
-            log.info(f"[??] {acc.email} ?????")
+            log.info(f"[激活] {acc.email} 正在激活中，跳过重复调用")
             return acc.valid and not acc.activation_pending
-        log.warning(f"[??] {acc.email} ??????????????")
+        log.warning(f"[激活] {acc.email} 激活超时，重置激活标志重新尝试")
         setattr(acc, "_is_activating", False)
 
-    log.info(f"[??] ???????{acc.email}")
+    log.info(f"[激活] 开始激活账号 {acc.email}")
     setattr(acc, "_is_activating", True)
     setattr(acc, "_activation_started_at", time.time())
     try:
@@ -681,17 +681,17 @@ async def activate_account(acc: Account) -> bool:
             async with _AsyncMailClient() as mail_client:
                 verify_link = await mail_client.get_verify_link_for_email(acc.email, timeout_sec=30)
         except Exception as e:
-            log.warning(f"[??] {acc.email} ?? API ?????{e}")
+            log.warning(f"[激活] {acc.email} 邮件 API 失败: {e}")
 
         if not verify_link:
-            log.info(f"[??] {acc.email} ?? API ????????????")
+            log.info(f"[激活] {acc.email} 邮件 API 未返回链接，使用页面方式")
             verify_link = await _find_verify_link_via_mail_page(acc.email)
 
         if not verify_link:
             log.warning(f"[Activate] activation email not found for {acc.email}")
             return False
 
-        log.info(f"[??] {acc.email} ????????{verify_link[:120]}")
+        log.info(f"[激活] {acc.email} 找到验证链接：{verify_link[:120]}")
 
         async with _new_browser() as browser:
             page = await browser.new_page()
@@ -705,32 +705,32 @@ async def activate_account(acc: Account) -> bool:
 
             await asyncio.sleep(5)
             token = await page.evaluate("localStorage.getItem('token')")
-            log.info(f"[??] {acc.email} ?????????????{page.url}???? Token?{'?' if token else '?'}")
+            log.info(f"[激活] {acc.email} 访问验证链接后 URL={page.url}，Token：{'有' if token else '无'}")
 
             if not token and acc.password:
                 try:
                     token = await _login_and_get_token(page, acc.email, acc.password, timeout_sec=20)
                 except Exception as e:
-                    log.warning(f"[??] {acc.email} ??????????{e}")
+                    log.warning(f"[激活] {acc.email} 登录获取 token 失败: {e}")
 
             if token:
                 acc.token = token
                 acc.valid = True
                 acc.activation_pending = False
-                log.info(f"[??] {acc.email} ????")
+                log.info(f"[激活] {acc.email} 激活成功")
                 return True
 
             # Some activation links make the original token usable again without issuing a new one.
             if await _verify_qwen_token(acc.token):
                 acc.valid = True
                 acc.activation_pending = False
-                log.info(f"[??] {acc.email} ???? Token ?????")
+                log.info(f"[激活] {acc.email} 旧 Token 仍然有效，激活完成")
                 return True
 
-            log.warning(f"[??] {acc.email} ????????? Token")
+            log.warning(f"[激活] {acc.email} 激活失败，无法获取 Token")
             return False
     except Exception as e:
-        log.error(f"[??] {acc.email} ?????{e}")
+        log.error(f"[激活] {acc.email} 激活异常: {e}")
         return False
     finally:
         setattr(acc, "_is_activating", False)
@@ -755,20 +755,20 @@ class AuthResolver:
                 if not getattr(acc, 'activation_pending', False):
                     acc.valid = True
                     await self.pool.save()
-                    log.info(f"[??] {acc.email} Token ??????????")
+                    log.info(f"[自愈] {acc.email} Token 刷新成功，已标记有效")
                     return
                 log.info(f"[BGRefresh] {acc.email} token refreshed but account still needs activation")
             else:
-                log.warning(f"[??] {acc.email} Token ???????????")
+                log.warning(f"[自愈] {acc.email} Token 刷新失败，尝试激活")
 
             activated = await activate_account(acc)
             if activated:
                 acc.activation_pending = False
                 acc.valid = True
                 await self.pool.save()
-                log.info(f"[??] {acc.email} ??????????")
+                log.info(f"[自愈] {acc.email} 激活成功，已保存")
             else:
-                log.warning(f"[??] {acc.email} ???????????")
+                log.warning(f"[自愈] {acc.email} 激活失败")
         except Exception as e:
             log.warning(f"[BGRefresh] {acc.email} auto heal failed: {e}")
         finally:

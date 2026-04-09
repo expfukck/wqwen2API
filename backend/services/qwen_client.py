@@ -32,11 +32,12 @@ class QwenClient:
         self.engine = engine
         self.account_pool = account_pool
         self.auth_resolver = AuthResolver(account_pool)
+        self.active_chat_ids: set[str] = set()  # 正在使用中的 chat_id，GC 不得焚烧
 
-    async def create_chat(self, token: str, model: str) -> str:
+    async def create_chat(self, token: str, model: str, chat_type: str = "t2t") -> str:
         ts = int(time.time())
         body = {"title": f"api_{ts}", "models": [model], "chat_mode": "normal",
-                "chat_type": "t2t", "timestamp": ts}
+                "chat_type": chat_type, "timestamp": ts}
 
         r = await self.engine.api_call("POST", "/api/v2/chats/new", token, body)
         if r["status"] == 429:
@@ -142,12 +143,17 @@ class QwenClient:
 
     def _build_payload(self, chat_id: str, model: str, content: str, has_custom_tools: bool = False) -> dict:
         ts = int(time.time())
+        # 有工具时关闭思考模式——工具调用只需要输出结构化 JSON，思考会白白浪费几十秒
         feature_config = {
-            "thinking_enabled": True, "output_schema": "phase", "research_mode": "normal",
-            "auto_thinking": True, "thinking_mode": "Auto", "thinking_format": "summary",
+            "thinking_enabled": not has_custom_tools,
+            "output_schema": "phase",
+            "research_mode": "normal",
+            "auto_thinking": not has_custom_tools,
+            "thinking_mode": "off" if has_custom_tools else "Auto",
+            "thinking_format": "summary",
             "auto_search": not has_custom_tools,
             "code_interpreter": not has_custom_tools,
-            "function_calling": not has_custom_tools,  # disable Qwen native tool calls
+            "function_calling": not has_custom_tools,
             "plugins_enabled": not has_custom_tools,
         }
         return {
@@ -159,6 +165,27 @@ class QwenClient:
                 "timestamp": ts, "models": [model], "chat_type": "t2t",
                 "feature_config": feature_config,
                 "extra": {"meta": {"subChatType": "t2t"}}, "sub_chat_type": "t2t", "parent_id": None,
+            }],
+            "timestamp": ts,
+        }
+
+    def _build_image_payload(self, chat_id: str, model: str, prompt: str) -> dict:
+        ts = int(time.time())
+        feature_config = {
+            "thinking_enabled": False, "output_schema": "phase",
+            "auto_thinking": False, "thinking_mode": "off",
+            "auto_search": False, "code_interpreter": False,
+            "function_calling": False, "plugins_enabled": True,
+        }
+        return {
+            "stream": True, "version": "2.1", "incremental_output": True,
+            "chat_id": chat_id, "chat_mode": "normal", "model": model, "parent_id": None,
+            "messages": [{
+                "fid": str(uuid.uuid4()), "parentId": None, "childrenIds": [str(uuid.uuid4())],
+                "role": "user", "content": prompt, "user_action": "chat", "files": [],
+                "timestamp": ts, "models": [model], "chat_type": "t2i",
+                "feature_config": feature_config,
+                "extra": {"meta": {"subChatType": "t2i"}}, "sub_chat_type": "t2i", "parent_id": None,
             }],
             "timestamp": ts,
         }
@@ -205,10 +232,12 @@ class QwenClient:
                     f"rate_limited={pool_status['rate_limited']}, in_use={pool_status['in_use']}, waiting={pool_status['waiting']})"
                 )
                 
+            chat_id: Optional[str] = None
             try:
                 chat_id = await self.create_chat(acc.token, model)
+                self.active_chat_ids.add(chat_id)
                 payload = self._build_payload(chat_id, model, content, has_custom_tools)
-                
+
                 # First yield the chat_id and account to the consumer
                 yield {"type": "meta", "chat_id": chat_id, "acc": acc}
 
@@ -233,9 +262,12 @@ class QwenClient:
                     events = self.parse_sse_chunk(buffer)
                     for evt in events:
                         yield {"type": "event", "event": evt}
+                self.active_chat_ids.discard(chat_id)
                 return
-                
+
             except Exception as e:
+                if chat_id:
+                    self.active_chat_ids.discard(chat_id)  # type: ignore[arg-type]
                 err_msg = str(e).lower()
                 should_save = False
                 if "429" in err_msg or "rate limit" in err_msg or "too many" in err_msg:
@@ -266,3 +298,72 @@ class QwenClient:
                 log.warning(f"[Retry {attempt+1}/{settings.MAX_RETRIES}] Account {acc.email} failed: {e}. Retrying...")
                 
         raise Exception(f"All {settings.MAX_RETRIES} attempts failed. Please check upstream accounts.")
+
+    async def image_generate_with_retry(self, model: str, prompt: str, exclude_accounts: Optional[set[str]] = None) -> tuple[str, "Account", str]:
+        """调用千问 T2I 生成图片，返回 (原始响应文本, 使用的账号, chat_id)"""
+        exclude = set(exclude_accounts or set())
+        for attempt in range(settings.MAX_RETRIES):
+            acc = await self.account_pool.acquire_wait(timeout=60, exclude=exclude)
+            if not acc:
+                pool_status = self.account_pool.status()
+                raise Exception(
+                    f"No available accounts in pool "
+                    f"(valid={pool_status['valid']}, rate_limited={pool_status['rate_limited']})"
+                )
+
+            chat_id: Optional[str] = None
+            try:
+                chat_id = await self.create_chat(acc.token, model, chat_type="t2i")
+                self.active_chat_ids.add(chat_id)
+                payload = self._build_image_payload(chat_id, model, prompt)
+
+                buffer = ""
+                answer_text = ""
+                async for chunk_result in self.engine.fetch_chat(acc.token, chat_id, payload):
+                    if chunk_result.get("status") == 429:
+                        raise Exception("Engine Queue Full")
+                    if chunk_result.get("status") not in (200, "streamed"):
+                        raise Exception(f"HTTP {chunk_result['status']}: {chunk_result.get('body', '')[:200]}")
+                    if "chunk" in chunk_result:
+                        buffer += chunk_result["chunk"]
+                        while "\n\n" in buffer:
+                            msg, buffer = buffer.split("\n\n", 1)
+                            for evt in self.parse_sse_chunk(msg):
+                                if evt.get("type") == "delta" and evt.get("phase") in ("answer", "t2i", "image"):
+                                    answer_text += evt.get("content", "")
+                                elif evt.get("type") == "delta":
+                                    # also capture any content that might contain image URLs
+                                    c = evt.get("content", "")
+                                    if "http" in c:
+                                        answer_text += c
+
+                if buffer:
+                    for evt in self.parse_sse_chunk(buffer):
+                        if evt.get("type") == "delta":
+                            c = evt.get("content", "")
+                            if evt.get("phase") in ("answer", "t2i", "image") or "http" in c:
+                                answer_text += c
+
+                self.active_chat_ids.discard(chat_id)
+                log.info(f"[T2I] 生成完成，响应长度={len(answer_text)}: {answer_text[:120]!r}")
+                return answer_text, acc, chat_id
+
+            except Exception as e:
+                if chat_id:
+                    self.active_chat_ids.discard(chat_id)  # type: ignore[arg-type]
+                err_msg = str(e).lower()
+                if "429" in err_msg or "rate limit" in err_msg or "too many" in err_msg:
+                    self.account_pool.mark_rate_limited(acc, error_message=str(e))
+                elif _is_pending_activation_error(err_msg):
+                    self.account_pool.mark_invalid(acc, reason="pending_activation", error_message=str(e))
+                    asyncio.create_task(self.auth_resolver.auto_heal_account(acc))
+                elif _is_banned_error(err_msg):
+                    self.account_pool.mark_invalid(acc, reason="banned", error_message=str(e))
+                elif _is_auth_error(err_msg):
+                    self.account_pool.mark_invalid(acc, reason="auth_error", error_message=str(e))
+                    asyncio.create_task(self.auth_resolver.auto_heal_account(acc))
+                exclude.add(acc.email)
+                self.account_pool.release(acc)
+                log.warning(f"[T2I Retry {attempt+1}/{settings.MAX_RETRIES}] Account {acc.email} failed: {e}")
+
+        raise Exception(f"All {settings.MAX_RETRIES} T2I attempts failed.")

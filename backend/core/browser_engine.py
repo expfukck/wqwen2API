@@ -21,6 +21,42 @@ async (args) => {
 }
 """
 
+JS_STREAM_CHUNKED = """
+async (args) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 1800000);
+    try {
+        const res = await fetch(args.url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer ' + args.token
+            },
+            body: JSON.stringify(args.payload),
+            signal: controller.signal
+        });
+        if (!res.ok) {
+            const t = await res.text();
+            clearTimeout(timer);
+            return { status: res.status, body: t.substring(0, 2000) };
+        }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const chunk = decoder.decode(value, { stream: true });
+            await send_chunk(args.chat_id, chunk);
+        }
+        clearTimeout(timer);
+        return { status: 200, body: '__DONE__' };
+    } catch(e) {
+        clearTimeout(timer);
+        return { status: 0, body: 'JS error: ' + e.message };
+    }
+}
+"""
+
 JS_STREAM_FULL = """
 async (args) => {
     const controller = new AbortController();
@@ -216,15 +252,43 @@ class BrowserEngine:
 
         needs_refresh = False
         url = f'/api/v2/chat/completions?chat_id={chat_id}'
+        queue: asyncio.Queue = asyncio.Queue()
+        self.stream_queues[chat_id] = queue
         try:
-            res = await asyncio.wait_for(
-                page.evaluate(JS_STREAM_FULL, {"url": url, "token": token, "payload": payload}),
-                timeout=1800,
+            # 启动 JS 流式读取（不 await），同时从队列实时 yield 每个 chunk
+            js_task = asyncio.create_task(
+                page.evaluate(JS_STREAM_CHUNKED, {
+                    "url": url, "token": token, "payload": payload, "chat_id": chat_id
+                })
             )
-            if res.get("status") != 200:
-                log.warning(f"[Browser] JS Error/Non-200: {res.get('body','')[:100]}")
-                needs_refresh = True
-            yield res
+            # 从队列实时转发 chunk，直到 JS 任务结束且队列清空
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(queue.get(), timeout=120)
+                    yield {"status": "streamed", "chunk": chunk}
+                except asyncio.TimeoutError:
+                    if js_task.done():
+                        break
+                    log.warning(f"[Browser] 流式读取超时等待 chunk (chat_id={chat_id})")
+                    needs_refresh = True
+                    break
+                if js_task.done() and queue.empty():
+                    break
+
+            # 获取 JS 任务最终返回值（状态码 + 错误信息）
+            if not js_task.done():
+                try:
+                    final = await asyncio.wait_for(js_task, timeout=10)
+                except Exception:
+                    final = {"status": 0, "body": "task cancelled"}
+            else:
+                final = js_task.result() if not js_task.exception() else {"status": 0, "body": str(js_task.exception())}
+
+            if isinstance(final, dict) and final.get("status") not in (200, "streamed"):
+                log.warning(f"[Browser] JS 返回非200: {final.get('body','')[:100]}")
+                if final.get("status") != 200 and final.get("body") != "__DONE__":
+                    needs_refresh = True
+                    yield final
         except asyncio.TimeoutError:
             needs_refresh = True
             yield {"status": 0, "body": "Timeout"}
@@ -232,6 +296,7 @@ class BrowserEngine:
             needs_refresh = True
             yield {"status": 0, "body": str(e)}
         finally:
+            self.stream_queues.pop(chat_id, None)
             if needs_refresh:
                 asyncio.create_task(self._refresh_page_and_return(page))
             else:

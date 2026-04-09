@@ -3,6 +3,7 @@ import { Settings2, RefreshCw, KeyRound, ServerCrash, Code } from "lucide-react"
 import { Button } from "../components/ui/button"
 import { toast } from "sonner"
 import { getAuthHeader } from "../lib/auth"
+import { API_BASE } from "../lib/api"
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState<any>(null)
@@ -15,7 +16,7 @@ export default function SettingsPage() {
   }
 
   const fetchSettings = () => {
-    fetch("http://localhost:8080/api/admin/settings", { headers: getAuthHeader() })
+    fetch(`${API_BASE}/api/admin/settings`, { headers: getAuthHeader() })
       .then(res => {
         if(!res.ok) throw new Error("Unauthorized")
         return res.json()
@@ -50,7 +51,7 @@ export default function SettingsPage() {
   }
 
   const handleSaveConcurrency = () => {
-    fetch("http://localhost:8080/api/admin/settings", {
+    fetch(`${API_BASE}/api/admin/settings`, {
       method: "PUT",
       headers: { "Content-Type": "application/json", ...getAuthHeader() },
       body: JSON.stringify({ max_inflight_per_account: Number(maxInflight) })
@@ -63,7 +64,7 @@ export default function SettingsPage() {
   const handleSaveAliases = () => {
     try {
       const parsed = JSON.parse(modelAliases)
-      fetch("http://localhost:8080/api/admin/settings", {
+      fetch(`${API_BASE}/api/admin/settings`, {
         method: "PUT",
         headers: { "Content-Type": "application/json", ...getAuthHeader() },
         body: JSON.stringify({ model_aliases: parsed })
@@ -76,8 +77,10 @@ export default function SettingsPage() {
     }
   }
 
+  const baseUrl = API_BASE || `http://${window.location.hostname}:7860`
+
   const curlExample = `# 流式对话
-curl http://localhost:8080/v1/chat/completions \\
+curl ${baseUrl}/v1/chat/completions \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer YOUR_API_KEY" \\
   -d '{
@@ -87,7 +90,7 @@ curl http://localhost:8080/v1/chat/completions \\
   }'
 
 # Anthropic 格式
-curl http://localhost:8080/anthropic/v1/messages \\
+curl ${baseUrl}/anthropic/v1/messages \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer YOUR_API_KEY" \\
   -d '{
@@ -96,11 +99,42 @@ curl http://localhost:8080/anthropic/v1/messages \\
   }'
 
 # Gemini 格式
-curl http://localhost:8080/v1beta/models/qwen3.6-plus:generateContent \\
+curl ${baseUrl}/v1beta/models/qwen3.6-plus:generateContent \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer YOUR_API_KEY" \\
   -d '{
     "contents": [{"parts": [{"text": "你好"}]}]
+  }'
+
+# 图片生成（标准接口）
+curl ${baseUrl}/v1/images/generations \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer YOUR_API_KEY" \\
+  -d '{
+    "model": "dall-e-3",
+    "prompt": "一只赛博朋克风格的猫，霓虹灯背景，超写实",
+    "n": 1,
+    "size": "1024x1024"
+  }'
+
+# 图片生成（Chat 意图识别，自动路由）
+curl ${baseUrl}/v1/chat/completions \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer YOUR_API_KEY" \\
+  -d '{
+    "model": "qwen3.6-plus",
+    "stream": false,
+    "messages": [{"role": "user", "content": "帮我画一张星空下的雪山，写实风格"}]
+  }'
+
+# 视频生成（Chat 意图识别，链路预留）
+curl ${baseUrl}/v1/chat/completions \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer YOUR_API_KEY" \\
+  -d '{
+    "model": "qwen3.6-plus",
+    "stream": false,
+    "messages": [{"role": "user", "content": "生成视频：海浪拍打礁石，慢动作"}]
   }'`
 
   return (
@@ -151,7 +185,7 @@ curl http://localhost:8080/v1beta/models/qwen3.6-plus:generateContent \\
           <div className="p-6">
             <div className="space-y-1">
               <label className="text-sm font-medium">API 基础地址 (Base URL)</label>
-              <input type="text" readOnly value="http://localhost:8080" className="flex h-10 w-full rounded-md border border-input bg-muted px-3 py-2 text-sm font-mono text-muted-foreground" />
+              <input type="text" readOnly value={baseUrl} className="flex h-10 w-full rounded-md border border-input bg-muted px-3 py-2 text-sm font-mono text-muted-foreground" />
             </div>
           </div>
         </div>

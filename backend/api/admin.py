@@ -118,6 +118,20 @@ async def list_accounts(request: Request):
     return {"accounts": accounts}
 
 
+@router.post("/accounts/register-verify", dependencies=[Depends(verify_admin)])
+async def verify_register_secret(request: Request):
+    """验证注册解锁密码，正确则前端显示一键注册按钮。"""
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(400, "Invalid JSON")
+    secret = body.get("secret", "")
+    expected = settings.REGISTER_SECRET
+    if not expected:
+        return {"ok": False, "error": "register secret not configured"}
+    return {"ok": (secret == expected)}
+
+
 @router.post("/accounts/register", dependencies=[Depends(verify_admin)])
 async def register_new_account(request: Request):
     import logging

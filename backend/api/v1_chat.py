@@ -10,7 +10,7 @@ from backend.services.qwen_client import QwenClient
 from backend.services.token_calc import calculate_usage
 from backend.services.prompt_builder import messages_to_prompt
 from backend.services.tool_parser import parse_tool_calls, inject_format_reminder
-from backend.core.config import resolve_model, settings
+from backend.core.config import resolve_model, settings, IMAGE_MODEL_DEFAULT
 
 log = logging.getLogger("qwen2api.chat")
 router = APIRouter()
@@ -86,6 +86,60 @@ def _has_recent_unchanged_read_result(messages) -> bool:
             break
     return False
 
+_T2I_PATTERN = re.compile(
+    r'(生成图片|画(一|个|张)?图|draw|generate\s+image|create\s+image|make\s+image|图片生成|文生图|生成一张|画一张)',
+    re.IGNORECASE
+)
+_T2V_PATTERN = re.compile(
+    r'(生成视频|make\s+video|generate\s+video|create\s+video|视频生成|文生视频)',
+    re.IGNORECASE
+)
+
+def _detect_media_intent(messages: list) -> str:
+    """Return 't2i', 't2v', or 't2t' based on last user message."""
+    for msg in reversed(messages):
+        if msg.get("role") == "user":
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                text = " ".join(p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text")
+            else:
+                text = str(content)
+            if _T2V_PATTERN.search(text):
+                return "t2v"
+            if _T2I_PATTERN.search(text):
+                return "t2i"
+            break
+    return "t2t"
+
+def _extract_last_user_text(messages: list) -> str:
+    for msg in reversed(messages):
+        if msg.get("role") == "user":
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                return " ".join(p.get("text", "") for p in content if isinstance(p, dict) and p.get("type") == "text")
+            return str(content)
+    return ""
+
+def _extract_image_urls(text: str) -> list[str]:
+    urls: list[str] = []
+    for u in re.findall(r'!\[.*?\]\((https?://[^\s\)]+)\)', text):
+        urls.append(u.rstrip(").,;"))
+    if not urls:
+        for u in re.findall(r'"(?:url|image|src|imageUrl|image_url)"\s*:\s*"(https?://[^"]+)"', text):
+            urls.append(u)
+    if not urls:
+        cdn_pattern = r'https?://(?:wanx\.alicdn\.com|img\.alicdn\.com|[^\s"<>]+\.(?:jpg|jpeg|png|webp|gif))[^\s"<>]*'
+        for u in re.findall(cdn_pattern, text, re.IGNORECASE):
+            urls.append(u.rstrip(".,;)\"'>"))
+    seen: set[str] = set()
+    result: list[str] = []
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            result.append(u)
+    return result
+
+
 @router.post("/completions")
 @router.post("/chat/completions")
 @router.post("/v1/chat/completions")
@@ -132,18 +186,132 @@ async def chat_completions(request: Request):
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     created = int(time.time())
 
+    # Media intent routing: auto-detect image / video generation requests
+    media_intent = _detect_media_intent(history_messages)
+    if media_intent == "t2v":
+        log.warning("[OAI] t2v intent detected but not yet validated; falling back to t2t")
+        media_intent = "t2t"
+
+    if media_intent == "t2i":
+        image_prompt = _extract_last_user_text(history_messages)
+        log.info(f"[OAI-T2I] Routing to image generation, model={IMAGE_MODEL_DEFAULT}, prompt={image_prompt[:80]!r}")
+
+        if stream:
+            async def generate_image_stream():
+                mk = lambda delta, finish=None: json.dumps({
+                    "id": completion_id, "object": "chat.completion.chunk",
+                    "created": created, "model": model_name,
+                    "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]
+                }, ensure_ascii=False)
+                try:
+                    answer_text, acc, chat_id = await client.image_generate_with_retry(IMAGE_MODEL_DEFAULT, image_prompt)
+                    client.account_pool.release(acc)
+                    import asyncio as _asyncio
+                    _asyncio.create_task(client.delete_chat(acc.token, chat_id))
+                    image_urls = _extract_image_urls(answer_text)
+                    content = "\n".join(f"![generated]({u})" for u in image_urls) if image_urls else answer_text
+                    yield f"data: {mk({'role': 'assistant'})}\n\n"
+                    yield f"data: {mk({'content': content})}\n\n"
+                    yield f"data: {mk({}, 'stop')}\n\n"
+                    yield "data: [DONE]\n\n"
+                except Exception as e:
+                    log.error(f"[OAI-T2I] 生成失败: {e}")
+                    yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            return StreamingResponse(generate_image_stream(), media_type="text/event-stream",
+                                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+        else:
+            try:
+                answer_text, acc, chat_id = await client.image_generate_with_retry(IMAGE_MODEL_DEFAULT, image_prompt)
+                client.account_pool.release(acc)
+                import asyncio as _asyncio
+                _asyncio.create_task(client.delete_chat(acc.token, chat_id))
+                image_urls = _extract_image_urls(answer_text)
+                content = "\n".join(f"![generated]({u})" for u in image_urls) if image_urls else answer_text
+                from fastapi.responses import JSONResponse
+                return JSONResponse({
+                    "id": completion_id, "object": "chat.completion", "created": created, "model": model_name,
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+                    "images": image_urls,
+                    "usage": {"prompt_tokens": len(image_prompt), "completion_tokens": len(content),
+                              "total_tokens": len(image_prompt) + len(content)}
+                })
+            except Exception as e:
+                log.error(f"[OAI-T2I] 生成失败: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
     if stream:
         async def generate():
-            current_prompt = prompt  # local copy so we can modify for native-block retries
+            current_prompt = prompt
             excluded_accounts = set()
             for stream_attempt in range(settings.MAX_RETRIES):
               try:
-                # We need to simulate `_stream_with_retry` behavior using `client.chat_stream_events_with_retry`
                 events = []
                 chat_id = None
                 acc = None
-                
-                # Fetch all events (buffered)
+
+                # ── 无工具：事件到来立即转发给客户端（真流式）──────────────
+                if not tools:
+                    sent_role = False
+                    streamed_len = 0
+                    async for item in _stream_items_with_keepalive(client, qwen_model, current_prompt, has_custom_tools=False, exclude_accounts=excluded_accounts):
+                        if item["type"] == "keepalive":
+                            yield ": keepalive\n\n"
+                            continue
+                        if item["type"] == "meta":
+                            chat_id = item["chat_id"]
+                            acc = item["acc"]
+                            yield ": upstream-connected\n\n"
+                            continue
+                        if item["type"] != "event":
+                            continue
+                        evt = item["event"]
+                        if evt.get("type") != "delta":
+                            continue
+                        phase = evt.get("phase", "")
+                        content = evt.get("content", "")
+                        if phase == "answer" and content:
+                            if not sent_role:
+                                mk = lambda delta, finish=None: json.dumps({
+                                    "id": completion_id, "object": "chat.completion.chunk",
+                                    "created": created, "model": model_name,
+                                    "choices": [{"index": 0, "delta": delta, "finish_reason": finish}]
+                                }, ensure_ascii=False)
+                                yield f"data: {mk({'role': 'assistant'})}\n\n"
+                                sent_role = True
+                            streamed_len += len(content)
+                            yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model_name, 'choices': [{'index': 0, 'delta': {'content': content}, 'finish_reason': None}]}, ensure_ascii=False)}\n\n"
+
+                    # 空响应重试（还没发过内容才重试）
+                    if streamed_len == 0 and stream_attempt < settings.MAX_RETRIES - 1:
+                        if acc:
+                            client.account_pool.release(acc)
+                            if chat_id:
+                                import asyncio
+                                asyncio.create_task(client.delete_chat(acc.token, chat_id))
+                            excluded_accounts.add(acc.email)
+                        log.warning(f"[Stream] 空响应，重试 (attempt {stream_attempt+1}/{settings.MAX_RETRIES})")
+                        await asyncio.sleep(0.3)
+                        continue
+
+                    if not sent_role:
+                        yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model_name, 'choices': [{'index': 0, 'delta': {'role': 'assistant'}, 'finish_reason': None}]}, ensure_ascii=False)}\n\n"
+                    yield f"data: {json.dumps({'id': completion_id, 'object': 'chat.completion.chunk', 'created': created, 'model': model_name, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]}, ensure_ascii=False)}\n\n"
+                    yield "data: [DONE]\n\n"
+
+                    users = await users_db.get()
+                    for u in users:
+                        if u["id"] == token:
+                            u["used_tokens"] += streamed_len + len(prompt)
+                            break
+                    await users_db.save(users)
+                    if acc:
+                        client.account_pool.release(acc)
+                        if chat_id:
+                            import asyncio
+                            asyncio.create_task(client.delete_chat(acc.token, chat_id))
+                    return
+
+                # ── 有工具：缓冲完整响应后解析工具调用（原逻辑）──────────────
                 async for item in _stream_items_with_keepalive(client, qwen_model, current_prompt, has_custom_tools=bool(tools), exclude_accounts=excluded_accounts):
                     if item["type"] == "keepalive":
                         yield ": keepalive\n\n"
