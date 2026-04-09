@@ -8,9 +8,10 @@ from contextlib import asynccontextmanager
 log = logging.getLogger("qwen2api.browser")
 
 def _b64(params: dict) -> str:
-    """把参数字典序列化为 Base64 字符串，安全传入 JavaScript"""
+    """把参数字典序列化为 Base64 字符串，安全传入 JavaScript。
+    ensure_ascii=True 确保所有 Unicode 转为 \\uXXXX，Base64 解码后可被 atob/JSON.parse 正确处理。"""
     return base64.b64encode(
-        json.dumps(params, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+        json.dumps(params, ensure_ascii=True, separators=(',', ':')).encode('ascii')
     ).decode('ascii')
 
 JS_FETCH_TEMPLATE = """
@@ -279,7 +280,7 @@ class BrowserEngine:
             try:
                 code = JS_STREAM_FULL_TEMPLATE.replace("{B64}", _b64({
                     "url": url, "token": token,
-                    "payload_json": json.dumps(payload, ensure_ascii=False),
+                    "payload_json": json.dumps(payload, ensure_ascii=True),
                 }))
                 res = await asyncio.wait_for(
                     page.evaluate(code),
@@ -309,7 +310,7 @@ class BrowserEngine:
             # 启动 JS 流式读取（不 await），同时从队列实时 yield 每个 chunk
             code = JS_STREAM_CHUNKED_TEMPLATE.replace("{B64}", _b64({
                 "url": url, "token": token,
-                "payload_json": json.dumps(payload, ensure_ascii=False),
+                "payload_json": json.dumps(payload, ensure_ascii=True),
                 "chat_id": chat_id,
             }))
             js_task = asyncio.create_task(
