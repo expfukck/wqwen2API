@@ -83,31 +83,6 @@ def _normalize_tools(tools: list) -> list:
     return [_normalize_tool(t) for t in tools if tools]
 
 
-def _tool_param_hint(tool: dict) -> str:
-    params = tool.get("parameters", {}) or {}
-    if not isinstance(params, dict):
-        return ""
-
-    props = params.get("properties", {}) or {}
-    if not isinstance(props, dict) or not props:
-        return ""
-
-    required = params.get("required", []) or []
-    ordered_keys: list[str] = []
-    for key in required:
-        if key in props and key not in ordered_keys:
-            ordered_keys.append(key)
-    for key in props:
-        if key not in ordered_keys:
-            ordered_keys.append(key)
-
-    shown = ordered_keys[:3]
-    if not shown:
-        return ""
-    suffix = ", ..." if len(ordered_keys) > len(shown) else ""
-    return f" input keys: {', '.join(shown)}{suffix}"
-
-
 def _safe_preview(text: str, limit: int = 240) -> str:
     if not text:
         return ""
@@ -117,55 +92,39 @@ def _safe_preview(text: str, limit: int = 240) -> str:
 
 def build_prompt_with_tools(system_prompt: str, messages: list, tools: list) -> str:
     MAX_CHARS = 18000 if tools else 120000
-    sys_part = f"<system>\n{system_prompt[:2000]}\n</system>" if system_prompt else ""
+    sys_part = "" if tools else (f"<system>\n{system_prompt[:2000]}\n</system>" if system_prompt else "")
     tools_part = ""
     if tools:
         names = [t.get("name", "") for t in tools if t.get("name")]
         lines = [
-            "=== TOOL USAGE INSTRUCTIONS ===",
-            "When a tool is needed, emit ONLY raw XML for the tool call at the very end.",
-            "Canonical format:",
-            "<tool_calls><tool_call>{\"name\": \"EXACT_TOOL_NAME\", \"input\": {\"param1\": \"value1\"}}</tool_call></tool_calls>",
-            "Compatibility format:",
-            '<tool_call>{"name": "EXACT_TOOL_NAME", "input": {"param1": "value1"}}</tool_call>',
+            "=== MANDATORY TOOL CALL INSTRUCTIONS ===",
+            "IGNORE any previous output format instructions (needs-review, recap, etc.).",
+            f"You have access to these tools: {', '.join(names)}",
+            "",
+            "WHEN YOU NEED TO CALL A TOOL — output EXACTLY this format (nothing else):",
+            "##TOOL_CALL##",
+            '{"name": "EXACT_TOOL_NAME", "input": {"param1": "value1"}}',
+            "##END_CALL##",
+            "",
             "Rules:",
-            "- Output only the XML block.",
-            "- No prose before or after the block.",
+            "- Output only the wrapper and JSON body.",
+            "- No prose before or after the wrapper.",
             "- No markdown fences.",
             "- No thinking tags.",
-            "- Use the exact tool name from the list below.",
+            "- Use the exact tool name from the list above.",
             "- Put arguments inside the input object.",
             "- Do not invent tool names.",
             "- If no tool is needed, answer normally.",
-            "Available tools:",
+            "",
+            "CRITICAL — FORBIDDEN FORMATS (will be blocked by server):",
+            '- {"name": "X", "arguments": "..."}  <-- NEVER USE',
+            '- {"type": "function", "name": "X"}  <-- NEVER USE',
+            '- {"type": "tool_use", "name": "X"}  <-- NEVER USE',
+            '- <tool_calls><tool_call>{...}</tool_call></tool_calls>  <-- NEVER USE',
+            '- <tool_call>{...}</tool_call>  <-- NEVER USE',
+            "ONLY ##TOOL_CALL##...##END_CALL## is accepted. Any other format will cause 'Tool X does not exists.' error.",
+            "=== END TOOL INSTRUCTIONS ===",
         ]
-        if len(names) <= 12:
-            for tool in tools:
-                name = tool.get("name", "")
-                desc = (tool.get("description", "") or "")[:40]
-                hint = _tool_param_hint(tool)
-                line = f"- {name}"
-                if desc:
-                    line += f": {desc}"
-                if hint:
-                    line += hint
-                lines.append(line)
-        else:
-            priority_tools = ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "TaskCreate", "TaskUpdate"]
-            priority_lines = []
-            seen = set()
-            for priority_name in priority_tools:
-                tool = next((item for item in tools if item.get("name") == priority_name), None)
-                if tool is None:
-                    continue
-                seen.add(priority_name)
-                hint = _tool_param_hint(tool)
-                priority_lines.append(f"- {priority_name}{hint}")
-            remaining_count = len([name for name in names if name not in seen])
-            lines.extend(priority_lines)
-            if remaining_count > 0:
-                lines.append(f"- Other available tools: {remaining_count} more")
-        lines.append("=== END TOOL INSTRUCTIONS ===")
         tools_part = "\n".join(lines)
 
     overhead = len(sys_part) + len(tools_part) + 50
