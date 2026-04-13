@@ -16,7 +16,7 @@ from backend.runtime.execution import (
     evaluate_retry_directive,
 )
 from backend.services.auth_quota import resolve_auth_context
-from backend.services.prompt_builder import messages_to_prompt
+from backend.services.prompt_builder import CLAUDE_CODE_OPENAI_PROFILE, messages_to_prompt
 from backend.services.qwen_client import QwenClient
 from backend.toolcall.normalize import build_tool_name_registry
 
@@ -26,7 +26,7 @@ router = APIRouter()
 
 def _build_standard_request(req_data: dict) -> StandardRequest:
     model_name = req_data.get("model", "claude-3-5-sonnet")
-    prompt_result = messages_to_prompt(req_data)
+    prompt_result = messages_to_prompt(req_data, client_profile=CLAUDE_CODE_OPENAI_PROFILE)
     prompt = prompt_result.prompt
     tools = prompt_result.tools
     tool_names = [tool_name for tool_name in (tool.get("name") for tool in tools) if isinstance(tool_name, str) and tool_name]
