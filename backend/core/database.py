@@ -1,13 +1,14 @@
 import asyncio
 import json
 import logging
+import aiofiles
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 log = logging.getLogger("qwen2api.db")
 
 class AsyncJsonDB:
-    """带异步读写锁的 JSON 文件存储，防止并发损坏。"""
+    """带异步读写锁的 JSON 文件存储，防止并发损坏"""
     def __init__(self, path: str | Path, default_data: Any = None):
         self.path = Path(path)
         self.default_data = default_data if default_data is not None else []
@@ -26,8 +27,9 @@ class AsyncJsonDB:
                 self._data = self.default_data
                 return self._data
             try:
-                # 为了不阻塞事件循环，本应用可使用 asyncio.to_thread 或者直接读，因为文件很小
-                content = self.path.read_text(encoding="utf-8")
+                # 使用 aiofiles 进行非阻塞读写
+                async with aiofiles.open(self.path, mode='r', encoding='utf-8') as f:
+                    content = await f.read()
                 self._data = json.loads(content)
             except Exception as e:
                 log.error(f"Failed to load JSON from {self.path}: {e}")
@@ -38,7 +40,10 @@ class AsyncJsonDB:
         async with self._lock:
             self._data = data
             try:
-                self.path.write_text(json.dumps(self._data, indent=2, ensure_ascii=False), encoding="utf-8")
+                # 使用 aiofiles 进行非阻塞读写
+                content = json.dumps(self._data, indent=2, ensure_ascii=False)
+                async with aiofiles.open(self.path, mode='w', encoding='utf-8') as f:
+                    await f.write(content)
             except Exception as e:
                 log.error(f"Failed to save JSON to {self.path}: {e}")
 

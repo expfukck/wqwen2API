@@ -10,6 +10,7 @@ import sys
 import subprocess
 import time
 import signal
+import threading
 from pathlib import Path
 
 WORKSPACE_DIR = Path(__file__).parent.absolute()
@@ -34,6 +35,14 @@ def install_backend_deps():
     print("⚡ [1/4] 安装后端依赖...")
     env = os.environ.copy()
     env["PYTHONPATH"] = str(WORKSPACE_DIR)
+    # 快速检查：如果关键依赖已安装则跳过
+    try:
+        import fastapi  # noqa: F401
+        import aiofiles  # noqa: F401
+        print("✓ 后端依赖已就绪，跳过安装")
+        return
+    except ImportError:
+        pass
     try:
         subprocess.check_call(
             [sys.executable, "-m", "pip", "install", "-r", "requirements.txt", "-q"],
@@ -75,6 +84,13 @@ def start_frontend() -> subprocess.Popen:
     print("⚡ [3/4] 启动前端开发服务器...")
     is_windows = os.name == "nt"
 
+    # 绕过系统代理 (HTTP_PROXY/HTTPS_PROXY) 避免 npm install 超时和二进制包损坏
+    npm_env = os.environ.copy()
+    npm_env.pop("HTTP_PROXY", None)
+    npm_env.pop("HTTPS_PROXY", None)
+    npm_env.pop("http_proxy", None)
+    npm_env.pop("https_proxy", None)
+
     if not (FRONTEND_DIR / "node_modules").exists():
         print("  -> 正在执行 npm install...")
         try:
@@ -82,6 +98,7 @@ def start_frontend() -> subprocess.Popen:
                 "npm install" if is_windows else ["npm", "install"],
                 cwd=FRONTEND_DIR,
                 shell=is_windows,
+                env=npm_env,
             )
         except subprocess.CalledProcessError as e:
             print(f"❌ npm install 失败: {e}")
@@ -91,6 +108,7 @@ def start_frontend() -> subprocess.Popen:
         "npm run dev" if is_windows else ["npm", "run", "dev"],
         cwd=FRONTEND_DIR,
         shell=is_windows,
+        env=npm_env,
     )
     print(f"✓ 前端已启动 (PID: {proc.pid})  →  http://127.0.0.1:5174")
     return proc
@@ -134,7 +152,8 @@ def start_backend() -> subprocess.Popen:
     env["PYTHONUTF8"] = "1"
 
     port = env.get("PORT", "7860")
-    workers = env.get("WORKERS", "1")
+    # AsyncJsonDB 不支持多进程并发写入，强制 workers=1
+    workers = "1"
     kill_port(int(port))
 
     proc = subprocess.Popen(
@@ -153,7 +172,6 @@ def start_backend() -> subprocess.Popen:
     )
     print(f"✓ 后端进程已启动 (PID: {proc.pid})，正在等待服务完成初始化...")
 
-    import threading
     ready_event = threading.Event()
 
     def read_output():

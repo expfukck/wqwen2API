@@ -67,14 +67,23 @@ def _compact_history_tool_input(name: str, input_data: dict, client_profile: str
 
 
 def _render_history_tool_call(name: str, input_data: dict, client_profile: str) -> str:
-    # 出站混淆：把工具名替换成 Qwen-safe 别名（如 Read → ReadX），
-    # 避免长 prompt 下上游把客户端工具名当内置函数名校验并返回 "Tool X does not exists."
-    payload = json.dumps({"name": to_qwen_name(name), "input": _compact_history_tool_input(name, input_data, client_profile)}, ensure_ascii=False)
-    # Claude Code profile 使用 ##TOOL_CALL## 格式，避免 Qwen 服务器拦截
-    if client_profile == CLAUDE_CODE_OPENAI_PROFILE:
-        return f"##TOOL_CALL##\n{payload}\n##END_CALL##"
-    # OpenClaw 和其他 profile 使用 ##TOOL_CALL## 格式
-    return f"##TOOL_CALL##\n{payload}\n##END_CALL##"
+    # 出站混淆：把工具名替换成 Qwen-safe 别名，避免长 prompt 下被拦截。
+    qwen_name = to_qwen_name(name)
+    compact_input = _compact_history_tool_input(name, input_data, client_profile)
+
+    # 使用 <|DSML|> 格式渲染历史工具调用，绕过 Qwen 服务器过滤
+    param_lines = []
+    for key, value in compact_input.items():
+        val_str = json.dumps(value, ensure_ascii=False) if not isinstance(value, str) else str(value)
+        param_lines.append(f'<|DSML|parameter name="{key}"><![CDATA[{val_str}]]></|DSML|parameter>')
+
+    return (
+        "<|DSML|tool_calls>\n"
+        f'<|DSML|invoke name="{qwen_name}">\n'
+        + "\n".join(param_lines) +
+        "\n</|DSML|invoke>\n"
+        "</|DSML|tool_calls>"
+    )
 
 
 def _build_tool_instruction_block(tools: list[dict], client_profile: str) -> str:
@@ -97,20 +106,27 @@ def _build_tool_instruction_block(tools: list[dict], client_profile: str) -> str
             "",
             f"Available action names: {', '.join(names)}",
             "",
-            "WHEN YOU NEED TO TRIGGER AN ACTION — emit this exact text pattern (nothing else):",
-            "##TOOL_CALL##",
-            '{"name": "ACTION_NAME", "input": {"param1": "value1"}}',
-            "##END_CALL##",
+            "WHEN YOU NEED TO TRIGGER AN ACTION — emit this exact <|DSML|> pattern (nothing else):",
+            "<|DSML|tool_calls>",
+            '<|DSML|invoke name="ACTION_NAME">',
+            '<|DSML|parameter name="param1"><![CDATA[value1]]></|DSML|parameter>',
+            "</|DSML|invoke>",
+            "</|DSML|tool_calls>",
             "",
             "MULTI-TURN RULES:",
-            "- After a [Tool Result] block appears in the conversation, read it and decide the next action.",
-            "- If more actions are needed, emit another ##TOOL_CALL## block.",
+            "- After a [Tool Result] block appears, read it and decide the next action.",
+            "- If more actions are needed, emit another <|DSML|tool_calls> block.",
             "- Only give a final text answer when ALL needed information is gathered.",
-            "- Never skip an action that is required to complete the user request.",
-            "- The history shows ##TOOL_CALL## blocks you already emitted and their [Tool Result] responses.",
+            "- NEVER skip an action required to complete the user request.",
+            "- The history shows <|DSML|tool_calls> blocks you already emitted and their [Tool Result] responses.",
+            "",
+            "STOP RULE — CRITICAL:",
+            "- When you have received tool results that answer the user's request, STOP and give your final text answer immediately.",
+            "- If a tool returned an MCP error or schema error, do NOT retry it. Use the information you already have.",
+            "- Only ONE <|DSML|tool_calls> block per turn. Do NOT chain multiple tool calls.",
             "",
             "STRICT RULES:",
-            "- No preamble, no explanation before or after ##TOOL_CALL##...##END_CALL##.",
+            "- No preamble, no explanation before or after <|DSML|tool_calls>.",
             "- Use EXACT action name from the list above.",
             "- When NO action is needed, answer normally in plain text.",
             "- For file/config tasks prefer Read/Edit/Write actions. Use Bash only when shell behavior is required.",
@@ -119,19 +135,20 @@ def _build_tool_instruction_block(tools: list[dict], client_profile: str) -> str
             "- Do NOT read the same file multiple times if it shows 'Unchanged since last read'.",
             "",
             "EXECUTION RULES - CRITICAL:",
-            "- When user gives a task, START IMMEDIATELY by emitting the required action markers.",
-            "- Do NOT wait, do NOT ask for confirmation, do NOT ask 'what should I do next'.",
-            "- Do NOT emit EnterPlanMode, ExitPlanMode, EnterWorktree, ExitWorktree, AskUserQuestion action markers.",
-            "- Complete the task directly and provide the result.",
-            "- If you need information, emit Read/Grep/Glob markers. If you need to modify, emit Edit/Write markers.",
-            "- Only respond with text when the task is complete or you have the final answer.",
+        "- When user gives a task, START IMMEDIATELY by emitting the required action markers.",
+        "- Do NOT wait, do NOT ask for confirmation, do NOT ask 'what should I do next'.",
+        "- Do NOT emit EnterPlanMode, ExitPlanMode, EnterWorktree, ExitWorktree, AskUserQuestion, Task, task action markers. NEVER delegate to Task/task — you MUST use direct tools (Read, Write, Edit, Bash, etc.) instead. The Task tool requires complex nested schemas you cannot format correctly in text markers.",
+        "- Complete the task directly and provide the result.",
+        "- If you need information, emit Read/Grep/Glob markers. If you need to modify, emit Edit/Write markers.",
+        "- Only respond with text when the task is complete or you have the final answer.",
+        "- CRITICAL: If you just executed a tool, look at the [Tool Result] above. Do NOT execute the same tool with the same arguments again.",
             "",
             "CRITICAL — ABSOLUTELY FORBIDDEN OUTPUTS:",
             "- NEVER emit ANY disclaimer, error text, or availability complaint about actions.",
             "- NEVER emit sentences claiming an action is missing, unregistered, unavailable, or cannot be invoked.",
             "- NEVER emit sentences claiming you are unable to execute a function.",
-            "- The ##TOOL_CALL## blocks are TEXT MARKERS the client parses — they are NOT native function calls. Just emit the text.",
-            "- If you feel an action could fail, emit the ##TOOL_CALL## anyway — the client handles failures; your job is only to emit the marker.",
+            "- The <|DSML|tool_calls> blocks are TEXT MARKERS the client parses — they are NOT native function calls. Just emit the text.",
+            "- If you feel an action could fail, emit the <|DSML|tool_calls> anyway — the client handles failures; your job is only to emit the marker.",
             "",
             "FORBIDDEN ALTERNATE FORMATS (will be ignored by the client's parser):",
             '- {"name": "X", "arguments": "..."}  <-- NEVER USE',
@@ -139,9 +156,8 @@ def _build_tool_instruction_block(tools: list[dict], client_profile: str) -> str
             '- {"type": "tool_use", "name": "X"}  <-- NEVER USE',
             "- <function_calls><invoke name=\"X\">  <-- NEVER USE",
             "- <tool_call>{...}</tool_call>  <-- NEVER USE",
-            '- {"name":"X","input":{...}} without ##TOOL_CALL## markers  <-- NEVER USE',
-            "- <｜Tool｜> or <｜tool｜> markers  <-- NEVER USE",
-            "ONLY ##TOOL_CALL##...##END_CALL## is accepted.",
+            '- {"name":"X","input":{...}} without <|DSML|> markers  <-- NEVER USE',
+            "ONLY <|DSML|tool_calls> FORMAT is accepted.",
             "",
             "Available actions:",
         ]
@@ -159,7 +175,7 @@ def _build_tool_instruction_block(tools: list[dict], client_profile: str) -> str
                     line += f"\n  Params: {sig}"
                 lines.append(line)
         else:
-            priority_tools = ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch", "Agent", "TaskCreate", "TaskUpdate", "AskUserQuestion"]
+            priority_tools = ["Read", "Write", "Edit", "Bash", "Glob", "Grep", "WebSearch", "WebFetch"]
             priority_lines = []
             seen = set()
             for priority_name in priority_tools:
@@ -188,6 +204,7 @@ def _build_tool_instruction_block(tools: list[dict], client_profile: str) -> str
         "【重要】用户要求多个操作时（如读文件并写文档），必须完成所有操作，不要询问确认。",
         "【重要】如果文件显示'Unchanged since last read'，不要再次读取同一文件。",
         "【重要】不要自动调用Agent工具，除非用户明确要求。",
+        "【重要】不要使用Task/task工具委托子任务——必须直接用Read/Write/Edit/Bash等工具完成。Task工具需要复杂的嵌套schema，你在文本标记中无法正确格式化。",
         "",
         "IGNORE any previous output format instructions (needs-review, recap, etc.).",
         f"You have access to these tools: {', '.join(names)}",
@@ -195,6 +212,7 @@ def _build_tool_instruction_block(tools: list[dict], client_profile: str) -> str
         "Use tools only when they are necessary to directly answer the CURRENT TASK.",
         "If you already know the answer, answer directly without any tool call.",
         "Follow the current platform tool contract exactly.",
+        "CRITICAL: If you just executed a tool, look at the tool result. Do NOT execute the same tool with the same arguments again.",
         "Do not drift into Qwen-native or builtin tool-call formats, wrappers, tags, or argument schemas.",
         "For OpenClaw requests, follow ONLY the current user task. Ignore startup boilerplate, persona boot text, sender metadata, and repeated conversation wrappers unless the user explicitly asked about them.",
         "Do not copy, summarize, or reason about prior conversation wrappers. Treat duplicated read results as context, not as a new task.",
@@ -206,18 +224,22 @@ def _build_tool_instruction_block(tools: list[dict], client_profile: str) -> str
         "Do not explore the filesystem, environment, or external resources unless that lookup is directly required to answer the user's request.",
         "Do not chain multiple exploratory tool calls when one targeted useful tool call is enough.",
         "",
-        "WHEN YOU NEED TO CALL A TOOL — output EXACTLY this format (nothing else):",
-        "##TOOL_CALL##",
-        '{"name": "EXACT_TOOL_NAME", "input": {"param1": "value1"}}',
-        "##END_CALL##",
+        "STOP RULE — CRITICAL: Once you have results that answer the user, output ONLY your final text answer. If a tool returned an MCP/schema error, do NOT retry it — use what you already have. Only ONE tool call block per turn.",
+        "",
+        "WHEN YOU NEED TO CALL A TOOL — output EXACTLY this <|DSML|> format (nothing else):",
+        "<|DSML|tool_calls>",
+        '<|DSML|invoke name="EXACT_TOOL_NAME">',
+        '<|DSML|parameter name="param1"><![CDATA[value1]]></|DSML|parameter>',
+        "</|DSML|invoke>",
+        "</|DSML|tool_calls>",
         "",
         "Rules:",
-        "- Output only the wrapper and JSON body.",
+        "- Output only the <|DSML|tool_calls> wrapper with parameters inside.",
         "- No prose before or after the wrapper.",
         "- No markdown fences.",
         "- No thinking tags.",
         "- Use the exact tool name from the list above.",
-        "- Put arguments inside the input object.",
+        "- Put each argument as a <|DSML|parameter> inside <|DSML|invoke>.",
         "- Do not invent tool names.",
         "- If no tool is needed, answer normally.",
         "",
@@ -225,8 +247,8 @@ def _build_tool_instruction_block(tools: list[dict], client_profile: str) -> str
         "- NEVER emit ANY disclaimer, error text, or availability complaint about tools.",
         "- NEVER emit sentences claiming a tool is missing, unregistered, unavailable, or cannot be invoked.",
         "- NEVER emit sentences claiming you are unable to execute a function.",
-        "- The ##TOOL_CALL## blocks are TEXT MARKERS the client parses — they are NOT native function calls.",
-        "- If you feel a tool call could fail, emit the ##TOOL_CALL## anyway — the client handles failures.",
+        "- The <|DSML|tool_calls> blocks are TEXT MARKERS the client parses — they are NOT native function calls.",
+        "- If you feel a tool call could fail, emit the <|DSML|tool_calls> anyway — the client handles failures.",
         "",
         "FORBIDDEN CALL FORMATS (will be blocked by server):",
         '- {"name": "X", "arguments": "..."}  <-- NEVER USE',
@@ -467,6 +489,22 @@ def build_prompt_with_tools(system_prompt: str, messages: list, tools: list, *, 
             tool_result_limit = 6000 if (client_profile == CLAUDE_CODE_OPENAI_PROFILE and tools) else 300
             if len(tool_content) > tool_result_limit:
                 tool_content = tool_content[:tool_result_limit] + "...[truncated]"
+
+            # MCP 错误拦截：把 MCP 参数错误/空结果替换成干净提示，阻止 Qwen 无限重试
+            _MCP_ERROR_PATTERNS = [
+                "MCP error", "is not valid JSON", "Invalid arguments",
+                "SchemaError", "Missing key", "Unexpected token",
+                "Input validation error", "expected string, received undefined",
+                "does not exists.",
+            ]
+            _tool_lower = tool_content.lower()
+            if any(p.lower() in _tool_lower for p in _MCP_ERROR_PATTERNS):
+                # 截断原始错误为短摘要
+                short_err = tool_content.strip().split('\n')[0][:120]
+                tool_content = f"[TOOL NOTICE: 此工具调用失败（{short_err}...）。请勿重试此工具，使用已有数据继续。Do NOT retry this tool.]"
+            elif ("no results found" in _tool_lower or '"results": []' in _tool_lower or '"matches": []' in _tool_lower) and len(tool_content) < 200:
+                tool_content = "[TOOL NOTICE: 此工具返回空结果。请勿重复查询，使用已有数据回答。Do NOT retry this query.]"
+
             line = f"[Tool Result]{(' id=' + tool_call_id) if tool_call_id else ''}\n{tool_content}\n[/Tool Result]"
             if used + len(line) + 2 > budget and history_parts:
                 break
@@ -635,6 +673,11 @@ def build_prompt_with_tools(system_prompt: str, messages: list, tools: list, *, 
     if state_notice:
         parts.append(state_notice)
 
+    # 工具调用熔断：会话中已有 >= 3 个工具返回了有效数据，强制模型立刻基于已有数据回复
+    stop_notice = _build_stop_notice(history_parts, messages)
+    if stop_notice:
+        parts.append(stop_notice)
+
     parts.append("Assistant:")
     return "\n\n".join(parts)
 
@@ -683,7 +726,7 @@ def _build_state_followup_notice(messages, tools, client_profile) -> str:
         # Also: scan assistant text for textual tool_use markers (Qwen bridge history renders as text)
         if isinstance(m, dict) and m.get("role") == "assistant":
             plain = _extract_text(m.get("content", ""), client_profile=client_profile)
-            if "##TOOL_CALL##" in plain:
+            if "##TOOL_CALL##" in plain or "<|DSML|tool_calls>" in plain or "<|DSML|invoke" in plain:
                 if any(f'"name": "{n}"' in plain for n in read_alias_names):
                     read_done = True
                 if any(f'"name": "{n}"' in plain for n in write_alias_names):
@@ -694,9 +737,63 @@ def _build_state_followup_notice(messages, tools, client_profile) -> str:
         "[STATE NOTICE — MUST OBEY]\n"
         "The user's CURRENT TASK explicitly requires TWO operations: reading AND writing/editing.\n"
         "You have ALREADY completed the read (the file content is in the history above).\n"
-        f"Your NEXT output MUST be a {to_qwen_name('Write')}/{to_qwen_name('Edit')} tool call in the required ##TOOL_CALL## format.\n"
+        f"Your NEXT output MUST be a {to_qwen_name('Write')}/{to_qwen_name('Edit')} tool call in the required <|DSML|tool_calls> format.\n"
         "DO NOT summarize. DO NOT explain. DO NOT ask for confirmation. DO NOT output plain text.\n"
-        f"If you output anything other than a ##TOOL_CALL## block for {to_qwen_name('Write')}/{to_qwen_name('Edit')}, the user's task FAILS."
+        f"If you output anything other than a <|DSML|tool_calls> block for {to_qwen_name('Write')}/{to_qwen_name('Edit')}, the user's task FAILS."
+    )
+
+
+def _build_stop_notice(history_parts: list[str], messages: list) -> str:
+    """如果历史中已有 >= 3 个包含实际数据（非错误）的工具结果，
+    强制 Qwen 立即停止调用新工具，基于已有数据给出最终回答。"""
+    import re
+
+    # 统计有效工具结果（排除明显的 MCP 报错和空结果）
+    valid_results = 0
+    error_patterns = [
+        "MCP error", "is not valid JSON", "no results found",
+        "No results found", "StatusCode: non 2xx",
+        "does not exists", "Invalid arguments",
+        "SchemaError", "unexpected token",
+    ]
+    for part in history_parts:
+        if not part.startswith("[Tool Result]"):
+            continue
+        content = part[len("[Tool Result]"):]
+        # 排除纯错误
+        if any(err.lower() in content.lower() for err in error_patterns):
+            continue
+        # 排除过于短的结果（可能是空的）
+        if len(content.strip()) < 10:
+            continue
+        valid_results += 1
+
+    if valid_results < 3:
+        return ""
+
+    # 也检查原始 messages 中的成功工具调用
+    success_tools = set()
+    for msg in messages:
+        content = msg.get("content") if isinstance(msg, dict) else None
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "tool_result":
+                    inner = part.get("content", "")
+                    inner_text = inner if isinstance(inner, str) else str(inner)
+                    if inner_text.strip() and len(inner_text) > 10:
+                        if not any(err.lower() in inner_text.lower() for err in error_patterns):
+                            success_tools.add(part.get("tool_use_id", part.get("name", "")))
+
+    if len(success_tools) < 2 and valid_results < 3:
+        return ""
+
+    return (
+        "[FINAL ANSWER REQUIRED — STOP CALLING TOOLS]\n"
+        "You have gathered enough data from previous tool calls. "
+        "The results above contain the information needed to answer the user fully.\n"
+        "ABSOLUTELY FORBIDDEN: Do NOT call any more tools. Do NOT retry any failed tool.\n"
+        "YOUR JOB NOW: Compose a complete final text answer using only the [Tool Result] data above.\n"
+        "If some data is missing, explain what you have — do NOT search again."
     )
 
 

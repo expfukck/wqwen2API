@@ -175,7 +175,9 @@ def extract_blocked_tool_names(text: str, allowed_tool_names: list[str] | None =
         return []
     if not allowed_tool_names:
         return blocked
-    return [normalize_tool_name(name, allowed_tool_names) for name in blocked]
+    # 先反混淆 Qwen 返回的别名（如 qt_bash → bash, fs_put_file → Write）
+    from backend.services.tool_name_obfuscation import from_qwen_name
+    return [normalize_tool_name(from_qwen_name(name), allowed_tool_names) for name in blocked]
 
 
 def _recent_message_texts(messages: list[dict[str, Any]] | None, *, limit: int = 10) -> list[str]:
@@ -284,7 +286,7 @@ def has_recent_openai_same_tool_call(history_messages: list[dict[str, Any]] | No
 def has_invalid_textual_tool_contract(answer_text: str) -> bool:
     if not answer_text:
         return False
-    if "##TOOL_CALL##" not in answer_text and "<tool_call>" not in answer_text:
+    if "##TOOL_CALL##" not in answer_text and "<tool_call>" not in answer_text and "<|DSML|tool_calls>" not in answer_text:
         return False
     compact = answer_text.strip()
     tc_m = re.search(r'##TOOL_CALL##\s*(.*?)\s*##END_CALL##', compact, re.DOTALL | re.IGNORECASE)
@@ -309,7 +311,7 @@ def has_invalid_textual_tool_contract(answer_text: str) -> bool:
 def should_retry_textual_tool_contract(answer_text: str) -> bool:
     if not answer_text:
         return False
-    if "##TOOL_CALL##" in answer_text or "<tool_call>" in answer_text:
+    if "##TOOL_CALL##" in answer_text or "<tool_call>" in answer_text or "<|DSML|tool_calls>" in answer_text:
         return True
     return False
 
@@ -475,6 +477,11 @@ async def collect_completion_run(
                 len(reasoning_text),
                 final_finish_reason,
             )
+        # 最终清理：移除答案中所有残留的工具调用标记块（防止泄漏给客户端）
+        _TOOL_MARKER_CLEANUP = re.compile(r'(?:##TOOL_CALL##.*?##END_CALL##|<\|DSML\|tool_calls>.*?</\|DSML\|tool_calls>)', re.DOTALL)
+        answer_text = _TOOL_MARKER_CLEANUP.sub('', answer_text).strip()
+        reasoning_text = _TOOL_MARKER_CLEANUP.sub('', reasoning_text).strip()
+
         metrics.mark("stream_finish", float(len(raw_events)))
         state = RuntimeAttemptState(
             answer_text=answer_text,
@@ -813,9 +820,9 @@ def build_usage_delta_factory(prompt: str) -> Callable[[RuntimeExecutionResult, 
 
 
 def request_max_attempts(request: StandardRequest) -> int:
-    # 工具模式下给模型更多重试机会（毒性幻觉/重复调用场景常见），
-    # 原值 2 在多轮 retry 里太容易用完，升到 4
-    return 4 if request.tools else settings.MAX_RETRIES
+    # 工具模式下原来给 4 次重试，但 Qwen 服务器过滤拦截是确定性的，
+    # 多轮重试只会浪费时间和算力。降到 2（1 次原请求 + 1 次重试）即可。
+    return 2 if request.tools else settings.MAX_RETRIES
 
 
 def plan_runtime_attempts(request: StandardRequest, *, initial_prompt: str) -> RuntimeAttemptPlan:
@@ -861,6 +868,10 @@ def evaluate_retry_directive(
     if state.blocked_tool_names and request.tools:
         if not can_retry_after_output:
             return RuntimeRetryDirective(retry=False, next_prompt=current_prompt, reason=None)
+        # Qwen 服务器层过滤拦截工具调用 — format_reminder 绕不过服务器层，重试无效，只试1次
+        if attempt_index >= 1:
+            log.warning("[重试拦截] blocked_tool_name 重试已≥1次，服务器层过滤无法绕过，停止重试")
+            return RuntimeRetryDirective(retry=False, next_prompt=current_prompt, reason="blocked_tool_name_exhausted")
         blocked_name = normalize_tool_name(state.blocked_tool_names[0], request.tool_names)
         return _retry(
             f"blocked_tool_name:{blocked_name}",
@@ -902,20 +913,27 @@ def evaluate_retry_directive(
         if directive.stop_reason == "tool_use":
             first_tool = next((b for b in directive.tool_blocks if b.get("type") == "tool_use"), None)
             if first_tool:
-                repeated_same_tool = False
+                repeated_same_tool_count = 0
                 if getattr(request, "client_profile", CLAUDE_CODE_OPENAI_PROFILE) == "openclaw_openai":
-                    repeated_same_tool = has_recent_openai_same_tool_call(
+                    if has_recent_openai_same_tool_call(
+                        history_messages,
+                        first_tool.get("name", ""),
+                        first_tool.get("input", {}),
+                    ):
+                        repeated_same_tool_count = 1
+                else:
+                    repeated_same_tool_count = recent_same_tool_identity_count(
                         history_messages,
                         first_tool.get("name", ""),
                         first_tool.get("input", {}),
                     )
-                else:
-                    repeated_same_tool = recent_same_tool_identity_count(
-                        history_messages,
-                        first_tool.get("name", ""),
-                        first_tool.get("input", {}),
-                    ) >= 1
-                if repeated_same_tool and can_retry_after_output:
+                
+                # 如果连续重试了3次相同的工具（即使有参数变化，或一直卡在同一工具），就不再无脑重试
+                if repeated_same_tool_count >= 2:
+                    log.warning("[重试拦截] 模型已连续重复调用同一工具 >= 2 次，强行打断循环！")
+                    return RuntimeRetryDirective(retry=False, next_prompt=current_prompt, reason="repeated_tool_limit_exceeded")
+
+                if repeated_same_tool_count >= 1 and can_retry_after_output:
                     force_text = (
                         f"[强制要求]: 你已经用相同参数调用了 {first_tool.get('name')}。"
                         "不要重复相同的工具调用。"

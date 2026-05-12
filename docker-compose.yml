@@ -1,7 +1,7 @@
 services:
-  qwen2api:
-    image: yujunzhixue/qwen2api:latest
-    container_name: qwen2api
+  wqwen2api:
+    image: movemama/wqwen2api:latest
+    container_name: wqwen2api
     restart: unless-stopped
     env_file:
       - path: .env

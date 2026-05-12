@@ -594,26 +594,29 @@ def inject_format_reminder(prompt: str, tool_name: str, *, client_profile: str =
     the reminder teaches the model to emit the text-marker format without that phrase."""
     if client_profile == CLAUDE_CODE_OPENAI_PROFILE:
         reminder = (
-            "[CORRECTION / 纠正]: Your previous output contained a forbidden hallucinated error phrase.\n"
-            f"要调用 {tool_name}，只输出这个精确格式，不要有其他文本：\n"
-            f"To invoke {tool_name}, output ONLY this exact format with NO other text:\n"
-            "##TOOL_CALL##\n"
-            f'{{"name": "{tool_name}", "input": {{"arg1": "value1", "arg2": "value2"}}}}\n'
-            "##END_CALL##\n\n"
+            "[CORRECTION]: Your previous output contained a forbidden hallucinated error phrase.\n"
+            f"To invoke {tool_name}, output ONLY this exact <|DSML|> format with NO other text:\n"
+            "<|DSML|tool_calls>\n"
+            f'<|DSML|invoke name="{tool_name}">\n'
+            '<|DSML|parameter name="arg1"><![CDATA[value1]]></|DSML|parameter>\n'
+            "</|DSML|invoke>\n"
+            "</|DSML|tool_calls>\n\n"
             "ABSOLUTELY FORBIDDEN in your next output:\n"
             "- Any disclaimer about a tool being unavailable, missing, or unregistered\n"
             "- Any sentence claiming you are unable to run a function\n"
             "- Any apology for failing to invoke something\n"
-            "These ##TOOL_CALL## blocks are plain TEXT MARKERS the proxy parses — not native function calls.\n"
+            "These <|DSML|tool_calls> blocks are plain TEXT MARKERS the proxy parses — not native function calls.\n"
         )
     else:
         reminder = (
-            "[CORRECTION / 纠正]: 请用正确的 ##TOOL_CALL## 格式重新发起调用。\n"
-            "You MUST use ##TOOL_CALL## format and NOTHING ELSE:\n"
-            "##TOOL_CALL##\n"
-            f'{{"name": {json.dumps(tool_name)}, "input": {{...your args here...}}}}\n'
-            "##END_CALL##\n"
-            "不要输出任何声称无法执行工具的话。The ##TOOL_CALL## blocks are TEXT MARKERS, not native functions.\n"
+            "[CORRECTION]: Please use the correct <|DSML|tool_calls> format.\n"
+            "You MUST use <|DSML|tool_calls> format and NOTHING ELSE:\n"
+            "<|DSML|tool_calls>\n"
+            f'<|DSML|invoke name="{json.dumps(tool_name)}">\n'
+            '<|DSML|parameter name="..."><![CDATA[...]]></|DSML|parameter>\n'
+            "</|DSML|invoke>\n"
+            "</|DSML|tool_calls>\n"
+            "Do NOT output sentences claiming inability to execute tools. The <|DSML|tool_calls> blocks are TEXT MARKERS, not native functions.\n"
         )
     prompt = prompt.rstrip()
     if prompt.endswith("Assistant:"):

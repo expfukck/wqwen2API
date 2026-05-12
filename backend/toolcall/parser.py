@@ -5,6 +5,7 @@ import json
 from backend.toolcall.fallback_textkv import parse_textkv_format
 from backend.toolcall.formats_json import parse_json_format
 from backend.toolcall.formats_xml import parse_xml_format
+from backend.toolcall.formats_dsml import parse_dsml_format, has_dsml_syntax
 
 
 def _has_top_level_json_tool_syntax(text: str) -> bool:
@@ -39,11 +40,12 @@ def _has_top_level_json_tool_syntax(text: str) -> bool:
 
 def _has_xml_like_tool_syntax(text: str) -> bool:
     lowered = text.lower()
-    return any(marker in lowered for marker in ("<invoke", "<tool_call", "</tool_call>"))
+    return any(marker in lowered for marker in ("<invoke", "<tool_call", "</tool_call>", "<|dsml|tool_calls"))
 
 
 def parse_tool_calls_detailed(text: str, allowed_names: set[str]) -> dict[str, object]:
     candidates = [
+        ("dsml", parse_dsml_format(text, allowed_names)),
         ("json", parse_json_format(text, allowed_names)),
         ("xml", parse_xml_format(text, allowed_names)),
         ("textkv", parse_textkv_format(text, allowed_names)),
@@ -63,6 +65,7 @@ def parse_tool_calls_detailed(text: str, allowed_names: set[str]) -> dict[str, o
         "saw_tool_syntax": (
             _has_top_level_json_tool_syntax(text)
             or _has_xml_like_tool_syntax(text)
+            or has_dsml_syntax(text)
             or any(marker in text for marker in ("function.name:", "function.arguments:", '"name="'))
         ),
     }
