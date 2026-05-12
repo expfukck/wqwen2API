@@ -563,7 +563,7 @@ async def collect_completion_run(
             # 实时清洗：剔除流式片段中的幻觉拒绝文本，防止累积后触发重试
             if request.tools and _TOXIC_REFUSAL_RE.search(content):
                 toxic_hit_count += 1
-                if toxic_hit_count >= 8:
+                if toxic_hit_count >= 4:
                     log.warning(
                         "[收集完成] 拒绝循环检测: 连续%d次毒性片段，强制中断流",
                         toxic_hit_count,
