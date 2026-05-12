@@ -38,4 +38,4 @@ EXPOSE 7860
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -fsS "http://127.0.0.1:${PORT:-7860}/healthz" || exit 1
 
-CMD ["sh", "-c", "python -m uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-7860} --workers 1 --timeout-keep-alive 300 --limit-max-requests 0"]
+CMD ["sh", "-c", "python -m uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-7860} --workers 1 --timeout-keep-alive 300"]
