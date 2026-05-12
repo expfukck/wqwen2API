@@ -1,13 +1,22 @@
-# qwen2API Enterprise Gateway
+# wqwen2API — 优化版 Qwen 工具调用网关
 
-[![License](https://img.shields.io/github/license/YuJunZhiXue/qwen2API?style=flat-square)](https://github.com/YuJunZhiXue/qwen2API/blob/main/LICENSE)
-[![Stars](https://img.shields.io/github/stars/YuJunZhiXue/qwen2API?style=flat-square)](https://github.com/YuJunZhiXue/qwen2API/stargazers)
-[![Forks](https://img.shields.io/github/forks/YuJunZhiXue/qwen2API?style=flat-square)](https://github.com/YuJunZhiXue/qwen2API/network/members)
-[![Release](https://img.shields.io/github/v/release/YuJunZhiXue/qwen2API?style=flat-square)](https://github.com/YuJunZhiXue/qwen2API/releases)
-[![Docker Pulls](https://img.shields.io/docker/pulls/yujunzhixue/qwen2api?style=flat-square)](https://hub.docker.com/r/yujunzhixue/qwen2api)
+> 基于 [YuJunZhiXue/qwen2API](https://github.com/YuJunZhiXue/qwen2API) 深度优化
 
-[![Deploy on Zeabur](https://zeabur.com/button.svg)](https://zeabur.com/templates/qwen2api)
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FYuJunZhiXue%2Fqwen2API)
+[![Docker Pulls](https://img.shields.io/docker/pulls/movemama/wqwen2api?style=flat-square)](https://hub.docker.com/r/movemama/wqwen2api)
+
+### 优化亮点
+- **DSML 工具调用格式**：`<|DSML|tool_calls>` 替代 `##TOOL_CALL##`，绕过 Qwen 服务器过滤
+- **工具循环熔断**：≥3 个工具返回数据后强制停止，不再无限重试
+- **重试优化**：上限 4→2 次，blocked_tool_name 限制 1 次
+- **异步 I/O**：`aiofiles` 替换同步文件读写，避免事件循环阻塞
+- **任务委派禁止**：明确禁止 Qwen 使用 Task/Agent 工具
+
+### Docker 快速部署
+```bash
+docker pull movemama/wqwen2api:latest
+docker-compose up -d
+```
+
 
 语言 / Language: [中文](./README.md) | [English](./README.en.md)
 
