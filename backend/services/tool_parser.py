@@ -239,6 +239,41 @@ def _coerce_tool_input(name: str, input_data: Any, tools: list[dict[str, Any]]) 
                 fixed["file_path"] = fixed.pop("filename")
         return fixed
 
+    # 修正 Write 工具参数
+    if name == "Write":
+        fixed = dict(input_data)
+        if "file_path" not in fixed:
+            if "path" in fixed:
+                fixed["file_path"] = fixed.pop("path")
+            elif "filepath" in fixed:
+                fixed["file_path"] = fixed.pop("filepath")
+            elif "filePath" in fixed:
+                fixed["file_path"] = fixed.pop("filePath")
+        if "content" not in fixed and "file_text" not in fixed:
+            if "content" in fixed:
+                pass  # content already correct
+            elif "text" in fixed:
+                fixed["content"] = fixed.pop("text")
+            elif "file_text" in fixed:
+                fixed["content"] = fixed.pop("file_text")
+        return fixed
+
+    # 修正 Edit 工具参数
+    if name == "Edit":
+        fixed = dict(input_data)
+        if "file_path" not in fixed:
+            if "path" in fixed:
+                fixed["file_path"] = fixed.pop("path")
+            elif "filepath" in fixed:
+                fixed["file_path"] = fixed.pop("filepath")
+        if "old_string" not in fixed:
+            if "old_str" in fixed:
+                fixed["old_string"] = fixed.pop("old_str")
+        if "new_string" not in fixed:
+            if "new_str" in fixed:
+                fixed["new_string"] = fixed.pop("new_str")
+        return fixed
+
     # 修正 Bash 工具参数
     if name == "Bash":
         fixed = dict(input_data)

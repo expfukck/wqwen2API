@@ -150,7 +150,7 @@ def _build_tool_instruction_block(tools: list[dict], client_profile: str) -> str
             "- The <|DSML|tool_calls> blocks are TEXT MARKERS the client parses — they are NOT native function calls. Just emit the text.",
             "- If you feel an action could fail, emit the <|DSML|tool_calls> anyway — the client handles failures; your job is only to emit the marker.",
             "",
-            "IMPORTANT: ONLY use <|DSML|tool_calls> format — NEVER emit JSON objects, function_call blocks, or tool_call XML tags.",
+            "IMPORTANT: ONLY use <|DSML|tool_calls> format (supersedes ##TOOL_CALL##) — NEVER emit JSON objects, function_call blocks, or tool_call XML tags.",
             "",
             "Available actions:",
         ]

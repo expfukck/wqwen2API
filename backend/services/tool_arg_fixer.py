@@ -114,4 +114,45 @@ def fix_tool_call_arguments(tool_name: str, args: dict[str, Any]) -> dict[str, A
     """对所有工具调用应用全部修复。幂等。"""
     if not isinstance(args, dict):
         return args
+    args = _normalize_param_names(tool_name, args)
     return repair_exact_match(tool_name, args)
+
+
+# Qwen 常用的参数名幻觉 → 正确的参数名映射
+_PARAM_ALIASES: dict[str, dict[str, str]] = {
+    # Write / fs_put_file
+    "write": {"path": "file_path", "filepath": "file_path", "content": "file_text", "file_text": "file_text", "text": "file_text"},
+    "fs_put_file": {"path": "file_path", "filepath": "file_path", "content": "file_text", "file_text": "file_text", "text": "file_text"},
+    # Read / fs_open_file
+    "read": {"path": "file_path", "filepath": "file_path"},
+    "fs_open_file": {"path": "file_path", "filepath": "file_path"},
+    # Edit / fs_patch_file
+    "edit": {"path": "file_path", "filepath": "file_path", "old_str": "old_string", "new_str": "new_string"},
+    "fs_patch_file": {"path": "file_path", "filepath": "file_path", "old_str": "old_string", "new_str": "new_string"},
+    # Bash / shell_run
+    "bash": {"cmd": "command", "cmdline": "command", "shell_cmd": "command"},
+    "shell_run": {"cmd": "command", "cmdline": "command", "shell_cmd": "command"},
+    # Grep / text_search
+    "grep": {"query": "pattern", "search": "pattern"},
+    "text_search": {"query": "pattern", "search": "pattern"},
+    # Glob / path_find
+    "glob": {"path": "pattern", "dir": "path"},
+    "path_find": {"path": "pattern", "dir": "path"},
+}
+
+
+def _normalize_param_names(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
+    """把 Qwen 幻觉出的参数名映射回正确名称。"""
+    if not isinstance(args, dict):
+        return args
+    lower = (tool_name or "").lower()
+    for base_name, aliases in _PARAM_ALIASES.items():
+        if base_name in lower:
+            for orig_key in list(args.keys()):
+                key_lower = orig_key.lower()
+                if key_lower in aliases:
+                    correct = aliases[key_lower]
+                    if correct != orig_key:
+                        args[correct] = args.pop(orig_key)
+            return args
+    return args
