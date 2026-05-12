@@ -229,49 +229,49 @@ def _coerce_tool_input(name: str, input_data: Any, tools: list[dict[str, Any]]) 
             fixed["prompt"] = fixed.get("description", "Execute the task")
         return fixed
 
-    # 修正 Read 工具参数
-    if name == "Read":
-        fixed = dict(input_data)
-        if "file_path" not in fixed:
-            if "path" in fixed:
-                fixed["file_path"] = fixed.pop("path")
-            elif "filename" in fixed:
-                fixed["file_path"] = fixed.pop("filename")
-        return fixed
-
     # 修正 Write 工具参数
     if name == "Write":
         fixed = dict(input_data)
         if "file_path" not in fixed:
-            if "path" in fixed:
-                fixed["file_path"] = fixed.pop("path")
-            elif "filepath" in fixed:
-                fixed["file_path"] = fixed.pop("filepath")
-            elif "filePath" in fixed:
-                fixed["file_path"] = fixed.pop("filePath")
-        if "content" not in fixed and "file_text" not in fixed:
-            if "content" in fixed:
-                pass  # content already correct
-            elif "text" in fixed:
-                fixed["content"] = fixed.pop("text")
-            elif "file_text" in fixed:
-                fixed["content"] = fixed.pop("file_text")
+            for alias in ("path", "filepath", "filePath"):
+                if alias in fixed:
+                    fixed["file_path"] = fixed.pop(alias)
+                    break
+        if "content" not in fixed:
+            for alias in ("file_text", "text", "data", "body"):
+                if alias in fixed:
+                    fixed["content"] = fixed.pop(alias)
+                    break
         return fixed
 
     # 修正 Edit 工具参数
     if name == "Edit":
         fixed = dict(input_data)
         if "file_path" not in fixed:
-            if "path" in fixed:
-                fixed["file_path"] = fixed.pop("path")
-            elif "filepath" in fixed:
-                fixed["file_path"] = fixed.pop("filepath")
+            for alias in ("path", "filepath", "filePath"):
+                if alias in fixed:
+                    fixed["file_path"] = fixed.pop(alias)
+                    break
         if "old_string" not in fixed:
-            if "old_str" in fixed:
-                fixed["old_string"] = fixed.pop("old_str")
+            for alias in ("old_str", "oldString", "old_text"):
+                if alias in fixed:
+                    fixed["old_string"] = fixed.pop(alias)
+                    break
         if "new_string" not in fixed:
-            if "new_str" in fixed:
-                fixed["new_string"] = fixed.pop("new_str")
+            for alias in ("new_str", "newString", "new_text"):
+                if alias in fixed:
+                    fixed["new_string"] = fixed.pop(alias)
+                    break
+        return fixed
+
+    # 修正 Read 工具参数
+    if name == "Read":
+        fixed = dict(input_data)
+        if "file_path" not in fixed:
+            for alias in ("path", "filepath", "filePath", "filename"):
+                if alias in fixed:
+                    fixed["file_path"] = fixed.pop(alias)
+                    break
         return fixed
 
     # 修正 Grep 工具参数
