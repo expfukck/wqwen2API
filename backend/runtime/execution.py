@@ -481,6 +481,24 @@ async def collect_completion_run(
         _TOOL_MARKER_CLEANUP = re.compile(r'(?:##TOOL_CALL##.*?##END_CALL##|<\|DSML\|tool_calls>.*?</\|DSML\|tool_calls>)', re.DOTALL)
         answer_text = _TOOL_MARKER_CLEANUP.sub('', answer_text).strip()
         reasoning_text = _TOOL_MARKER_CLEANUP.sub('', reasoning_text).strip()
+        # 清理幻觉拒绝文本：Qwen 答复中声称"工具不存在"但工具实际已成功执行
+        _REFUSAL_TEXT = re.compile(
+            r'^.*(?:'
+            r'Tool\s+\S+\s+(?:does\s+not\s+exists?|is\s+not\s+(?:available|registered))'
+            r'|I\s+cannot\s+execute\s+this\s+tool'
+            r'|the\s+(?:provided\s+)?tool\s+\S+\s+is\s+not\s+available'
+            r'|该工具.{0,8}?不存在'
+            r'|工具.{0,12}?不存在'
+            r'|无法调用.{0,8}?工具'
+            r'|我无法执行.{0,8}?工具'
+            r').*$',
+            re.IGNORECASE | re.MULTILINE,
+        )
+        answer_text = _REFUSAL_TEXT.sub('', answer_text).strip()
+        reasoning_text = _REFUSAL_TEXT.sub('', reasoning_text).strip()
+        # 折叠连续空行
+        answer_text = re.sub(r'\n{3,}', '\n\n', answer_text)
+        reasoning_text = re.sub(r'\n{3,}', '\n\n', reasoning_text)
 
         metrics.mark("stream_finish", float(len(raw_events)))
         state = RuntimeAttemptState(
@@ -532,6 +550,17 @@ async def collect_completion_run(
             continue
 
         if phase == "answer" and content:
+            # 实时清洗：剔除流式片段中的幻觉拒绝文本，防止累积后触发重试
+            if request.tools and _TOXIC_REFUSAL_RE.search(content):
+                cleaned = _TOXIC_REFUSAL_RE.sub('', content).strip()
+                if cleaned:
+                    log.info("[收集完成] 片段清洗: %r → %r", content[:60], cleaned[:60])
+                    content = cleaned
+                else:
+                    log.info("[收集完成] 清洗毒性片段: %r", content[:60])
+                    if not emitted_visible_output:
+                        continue  # 尚未流出可见内容，丢弃此片段
+                    content = ""
             answer_fragments.append(content)
 
             # 毒性拒绝早期拦截：Qwen 偶尔幻觉出 "Tool X does not exists." 之类文本。
