@@ -123,9 +123,9 @@ _PARAM_ALIASES: dict[str, dict[str, str]] = {
     # Write / fs_put_file — 正确参数: filePath, content
     "write": {"path": "filePath", "filepath": "filePath", "file_path": "filePath", "file_text": "content", "text": "content"},
     "fs_put_file": {"path": "filePath", "filepath": "filePath", "file_path": "filePath", "file_text": "content", "text": "content"},
-    # Read / fs_open_file — 正确参数: file_path
-    "read": {"path": "file_path", "filepath": "file_path"},
-    "fs_open_file": {"path": "file_path", "filepath": "file_path"},
+    # Read / fs_open_file — 正确参数: filePath
+    "read": {"path": "filePath", "filepath": "filePath", "file_path": "filePath"},
+    "fs_open_file": {"path": "filePath", "filepath": "filePath", "file_path": "filePath"},
     # Edit / fs_patch_file — 正确参数: filePath, old_string, new_string
     "edit": {"path": "filePath", "filepath": "filePath", "file_path": "filePath", "old_str": "old_string", "new_str": "new_string"},
     "fs_patch_file": {"path": "filePath", "filepath": "filePath", "file_path": "filePath", "old_str": "old_string", "new_str": "new_string"},

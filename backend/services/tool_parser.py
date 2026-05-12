@@ -264,14 +264,16 @@ def _coerce_tool_input(name: str, input_data: Any, tools: list[dict[str, Any]]) 
                     break
         return fixed
 
-    # 修正 Read 工具参数（Schema 要求: file_path）
+    # 修正 Read 工具参数（Schema 要求: filePath）
     if name == "Read":
         fixed = dict(input_data)
-        if "file_path" not in fixed:
-            for alias in ("path", "filepath", "filePath", "filename"):
+        if "filePath" not in fixed:
+            for alias in ("file_path", "path", "filepath", "filename"):
                 if alias in fixed:
-                    fixed["file_path"] = fixed.pop(alias)
+                    fixed["filePath"] = fixed.pop(alias)
                     break
+        if "offset" not in fixed and "limit" not in fixed:
+            pass  # optional params, don't force
         return fixed
 
     # 修正 Grep 工具参数
