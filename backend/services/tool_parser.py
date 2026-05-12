@@ -329,14 +329,64 @@ def _coerce_tool_input(name: str, input_data: Any, tools: list[dict[str, Any]]) 
         coerced["query"] = queries.strip()
         return coerced
 
+    # === 通用自动参数纠错（对所有工具生效，不限于硬编码列表）===
+    # Qwen 常把参数名也幻觉，例如 Write 的 file_path 写成 path。
+    # 此处从工具 schema 中读取真正需要的参数名，自动映射常见别名。
+    tool_schema = _get_tool_schema(name, tools)
+    if tool_schema and isinstance(input_data, dict) and input_data:
+        fixed = _auto_map_param_aliases(dict(input_data), tool_schema)
+        if fixed is not None:
+            return fixed
+
     return input_data
 
 
+# ── 通用参数别名映射（对所有 IDE 工具生效）───────────────────────────
+
+_PARAM_ALIAS_RULES: dict[str, tuple[str, ...]] = {
+    "file_path": ("path", "filepath", "filePath", "filename", "file"),
+    "filePath": ("path", "filepath", "file_path", "filename", "file"),
+    "path": ("file_path", "filepath", "filePath"),
+    "content": ("text", "file_text", "data", "body"),
+    "text": ("content", "file_text", "data", "body"),
+    "file_text": ("content", "text", "data", "body"),
+    "pattern": ("query", "search", "regex", "regexp"),
+    "query": ("pattern", "search", "question"),
+    "command": ("cmd", "cmdline", "script", "shell_cmd", "run"),
+    "old_string": ("old_str", "oldString", "old_text", "source"),
+    "old_str": ("old_string", "oldString", "old_text", "source"),
+    "new_string": ("new_str", "newString", "new_text", "target", "replacement"),
+    "new_str": ("new_string", "newString", "new_text", "target", "replacement"),
+}
+
+
+def _get_tool_schema(name: str, tools: list[dict]) -> dict | None:
+    name_lower = name.lower()
+    for t in tools:
+        tn = t.get("name", "")
+        if isinstance(tn, str) and tn.lower() == name_lower:
+            return t.get("parameters") or t.get("input_schema") or {}
+    return None
+
+
+def _auto_map_param_aliases(fixed: dict, schema: dict) -> dict | None:
+    required = schema.get("required") or []
+    mutated = False
+    for req_name in required:
+        if req_name in fixed:
+            continue
+        aliases = _PARAM_ALIAS_RULES.get(req_name)
+        if not aliases:
+            continue
+        for alias in aliases:
+            if alias in fixed:
+                fixed[req_name] = fixed.pop(alias)
+                mutated = True
+                break
+    return fixed if mutated else None
+
+
 def parse_tool_calls(answer: str, tools: list):
-    return _parse_tool_calls(answer, tools, emit_logs=True)
-
-
-def parse_tool_calls_silent(answer: str, tools: list):
     return _parse_tool_calls(answer, tools, emit_logs=False)
 
 
