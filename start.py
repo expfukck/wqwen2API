@@ -163,6 +163,8 @@ def start_backend() -> subprocess.Popen:
             "--host", "0.0.0.0",
             "--port", port,
             "--workers", workers,
+            "--timeout-keep-alive", "300",
+            "--limit-max-requests", "0",
         ],
         cwd=WORKSPACE_DIR,
         env=env,

@@ -20,14 +20,14 @@ class QwenClient:
         self.auth_resolver = AuthResolver(account_pool) if account_pool is not None else None
         self.executor = QwenExecutor(self, account_pool)
 
-        # HTTP连接池配置（对齐 ds2api 的高性能设置）
+        # HTTP连接池配置（高延迟服务器优化）
         limits = httpx.Limits(
             max_connections=100,
-            max_keepalive_connections=20,
-            keepalive_expiry=30.0,
+            max_keepalive_connections=50,
+            keepalive_expiry=60.0,
         )
-        # 增加 read timeout 以支持长任务（工具调用可能需要更长时间）
-        timeout = httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0)
+        # 高延迟服务器：增加连接和池超时
+        timeout = httpx.Timeout(connect=60.0, read=600.0, write=60.0, pool=60.0)
         self._http_client = httpx.AsyncClient(
             limits=limits,
             timeout=timeout,
