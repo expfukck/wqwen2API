@@ -252,6 +252,13 @@ def _coerce_tool_input(name: str, input_data: Any, tools: list[dict[str, Any]]) 
                 if alias in fixed:
                     fixed["filePath"] = fixed.pop(alias)
                     break
+        # Qwen 幻觉出 patch/diff 参数 — 解析 unified diff 提取 old_string/new_string
+        if "patch" in fixed and "old_string" not in fixed and "new_string" not in fixed:
+            parsed = _parse_unified_diff(fixed.pop("patch"))
+            if parsed:
+                fixed["old_string"] = parsed[0]
+                fixed["new_string"] = parsed[1]
+                log.info("[ToolCoerce] Edit patch→old/new: old=%r new=%r", fixed["old_string"][:80], fixed["new_string"][:80])
         if "old_string" not in fixed:
             for alias in ("old_str", "oldString", "old_text"):
                 if alias in fixed:
@@ -407,6 +414,46 @@ def _auto_map_param_aliases(fixed: dict, schema: dict) -> dict | None:
                 mutated = True
                 break
     return fixed if mutated else None
+
+
+def _parse_unified_diff(patch: str) -> tuple[str, str] | None:
+    """解析 Qwen 幻觉出的 unified diff 格式，提取 old_string 和 new_string。
+    返回 (old_string, new_string) 或 None（解析失败）。
+    
+    Example:
+        --- a/file.txt
+        +++ b/file.txt
+        @@ -1 +1,2 @@
+        你好啊
+        +你好吗 帅哥
+    → ("你好啊", "你好啊\n你好吗 帅哥")
+    """
+    if not isinstance(patch, str) or not patch.strip():
+        return None
+    old_lines: list[str] = []
+    new_lines: list[str] = []
+    in_hunk = False
+    for line in patch.splitlines():
+        stripped = line.rstrip('\r')
+        if stripped.startswith('@@') and in_hunk is False:
+            in_hunk = True
+            continue
+        if not in_hunk:
+            continue
+        if stripped.startswith('+'):
+            new_lines.append(stripped[1:])
+        elif stripped.startswith('-'):
+            old_lines.append(stripped[1:])
+        elif stripped.startswith(' '):
+            old_lines.append(stripped[1:])
+            new_lines.append(stripped[1:])
+        else:
+            # context line without prefix — treat as unchanged
+            old_lines.append(stripped)
+            new_lines.append(stripped)
+    if not old_lines and not new_lines:
+        return None
+    return ("\n".join(old_lines), "\n".join(new_lines))
 
 
 def parse_tool_calls(answer: str, tools: list):

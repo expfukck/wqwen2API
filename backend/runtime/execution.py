@@ -382,6 +382,7 @@ async def collect_completion_run(
     first_event_marked = False
     raw_events: list[dict[str, Any]] = []
     metrics = StreamMetrics()
+    toxic_hit_count = 0  # 拒绝循环检测
 
     # 初始化 Tool Sieve 用于实时检测
     tool_sieve = None
@@ -391,7 +392,11 @@ async def collect_completion_run(
 
     def _finalize_result(*, reason: str | None = None) -> RuntimeExecutionResult:
         answer_text = "".join(answer_fragments)
-        reasoning_text = "".join(reasoning_fragments)
+            reasoning_text = "".join(reasoning_fragments)
+            # 拒绝循环中断：清除碎片文本，让空响应触发重试
+            if reason == "toxic_loop_aborted":
+                answer_text = ""
+                reasoning_text = ""
         if native_tool_calls and not answer_text:
             answer_text = native_tool_calls_to_markup(native_tool_calls)
 
@@ -557,6 +562,13 @@ async def collect_completion_run(
         if phase == "answer" and content:
             # 实时清洗：剔除流式片段中的幻觉拒绝文本，防止累积后触发重试
             if request.tools and _TOXIC_REFUSAL_RE.search(content):
+                toxic_hit_count += 1
+                if toxic_hit_count >= 8:
+                    log.warning(
+                        "[收集完成] 拒绝循环检测: 连续%d次毒性片段，强制中断流",
+                        toxic_hit_count,
+                    )
+                    return _finalize_result(reason="toxic_loop_aborted")
                 cleaned = _TOXIC_REFUSAL_RE.sub('', content).strip()
                 if cleaned:
                     log.info("[收集完成] 片段清洗: %r → %r", content[:60], cleaned[:60])
