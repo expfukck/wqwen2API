@@ -193,6 +193,10 @@ def _build_tool_instruction_block(tools: list[dict], client_profile: str) -> str
 
     lines = [
         "=== MANDATORY TOOL CALL INSTRUCTIONS ===",
+        "REASONING REQUIREMENT: Before responding, first analyze whether the user's task requires a tool call.",
+        "If the task involves reading/writing/editing files, searching, web queries, or executing commands, you MUST use the appropriate tool.",
+        "Do NOT just describe what you would do — actually invoke the tool by emitting a <|DSML|tool_calls> block.",
+        "",
         "【重要】用户输入什么语言，就用什么语言回复。User inputs Chinese → respond in Chinese. User inputs English → respond in English.",
         "【重要】用户要求多个操作时（如读文件并写文档），必须完成所有操作，不要询问确认。",
         "【重要】如果文件显示'Unchanged since last read'，不要再次读取同一文件。",
