@@ -146,13 +146,14 @@ def _normalize_param_names(tool_name: str, args: dict[str, Any]) -> dict[str, An
     if not isinstance(args, dict):
         return args
     lower = (tool_name or "").lower()
-    for base_name, aliases in _PARAM_ALIASES.items():
-        if base_name in lower:
-            for orig_key in list(args.keys()):
-                key_lower = orig_key.lower()
-                if key_lower in aliases:
-                    correct = aliases[key_lower]
-                    if correct != orig_key:
-                        args[correct] = args.pop(orig_key)
-            return args
+    aliases = _PARAM_ALIASES.get(lower)
+    if aliases:
+        seen: set[str] = set()
+        for orig_key in list(args.keys()):
+            key_lower = orig_key.lower()
+            if key_lower in aliases:
+                correct = aliases[key_lower]
+                if correct != orig_key and correct not in seen:
+                    args[correct] = args.pop(orig_key)
+                    seen.add(correct)
     return args

@@ -274,6 +274,30 @@ def _coerce_tool_input(name: str, input_data: Any, tools: list[dict[str, Any]]) 
                 fixed["new_string"] = fixed.pop("new_str")
         return fixed
 
+    # 修正 Grep 工具参数
+    if name == "Grep":
+        fixed = dict(input_data)
+        if "pattern" not in fixed:
+            if "query" in fixed:
+                fixed["pattern"] = fixed.pop("query")
+            elif "search" in fixed:
+                fixed["pattern"] = fixed.pop("search")
+            elif "regex" in fixed:
+                fixed["pattern"] = fixed.pop("regex")
+        return fixed
+
+    # 修正 Glob 工具参数
+    if name == "Glob":
+        fixed = dict(input_data)
+        if "pattern" not in fixed:
+            if "path" in fixed:
+                fixed["pattern"] = fixed.pop("path")
+            elif "glob" in fixed:
+                fixed["pattern"] = fixed.pop("glob")
+            elif "filepath" in fixed:
+                fixed["pattern"] = fixed.pop("filepath")
+        return fixed
+
     # 修正 Bash 工具参数
     if name == "Bash":
         fixed = dict(input_data)
