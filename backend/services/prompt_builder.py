@@ -752,23 +752,10 @@ def _build_stop_notice(history_parts: list[str], messages: list) -> str:
             continue
         valid_results += 1
 
-    if valid_results < 3:
+    if valid_results < 6:
         return ""
 
-    # 也检查原始 messages 中的成功工具调用
-    success_tools = set()
-    for msg in messages:
-        content = msg.get("content") if isinstance(msg, dict) else None
-        if isinstance(content, list):
-            for part in content:
-                if isinstance(part, dict) and part.get("type") == "tool_result":
-                    inner = part.get("content", "")
-                    inner_text = inner if isinstance(inner, str) else str(inner)
-                    if inner_text.strip() and len(inner_text) > 10:
-                        if not any(err.lower() in inner_text.lower() for err in error_patterns):
-                            success_tools.add(part.get("tool_use_id", part.get("name", "")))
-
-    if len(success_tools) < 2 and valid_results < 3:
+    if len(success_tools) < 4 and valid_results < 6:
         return ""
 
     return (
