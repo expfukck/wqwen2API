@@ -740,22 +740,27 @@ def _build_stop_notice(history_parts: list[str], messages: list) -> str:
         "does not exists", "Invalid arguments",
         "SchemaError", "unexpected token",
     ]
+    # 只统计数据查询类工具（Read/Grep/WebSearch等），跳过文件操作（Write/Edit/Bash）
+    action_patterns = [
+        "Wrote file", "file successfully", "Edited file",
+        "Edit applied", "file written", "Wrote contents",
+    ]
     for part in history_parts:
         if not part.startswith("[Tool Result]"):
             continue
         content = part[len("[Tool Result]"):]
-        # 排除纯错误
         if any(err.lower() in content.lower() for err in error_patterns):
             continue
-        # 排除过于短的结果（可能是空的）
+        if any(act.lower() in content.lower() for act in action_patterns):
+            continue  # 跳过写入/编辑操作结果
         if len(content.strip()) < 10:
             continue
         valid_results += 1
 
-    if valid_results < 6:
+    if valid_results < 3:
         return ""
 
-    if len(success_tools) < 4 and valid_results < 6:
+    if len(success_tools) < 2 and valid_results < 3:
         return ""
 
     return (
