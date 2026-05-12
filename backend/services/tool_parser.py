@@ -300,6 +300,26 @@ def _coerce_tool_input(name: str, input_data: Any, tools: list[dict[str, Any]]) 
                 fixed["pattern"] = fixed.pop("filepath")
         return fixed
 
+    # 修正 WebSearch 工具参数
+    if name == "WebSearch":
+        fixed = dict(input_data)
+        if "query" not in fixed:
+            for alias in ("searchQuery", "search_query", "q", "search", "question"):
+                if alias in fixed:
+                    fixed["query"] = fixed.pop(alias)
+                    break
+        return fixed
+
+    # 修正 WebFetch 工具参数
+    if name == "WebFetch":
+        fixed = dict(input_data)
+        if "url" not in fixed:
+            for alias in ("fetchUrl", "fetch_url", "link", "webpage", "page"):
+                if alias in fixed:
+                    fixed["url"] = fixed.pop(alias)
+                    break
+        return fixed
+
     # 修正 Bash 工具参数
     if name == "Bash":
         fixed = dict(input_data)
@@ -359,6 +379,7 @@ _PARAM_ALIAS_RULES: dict[str, tuple[str, ...]] = {
     "old_str": ("old_string", "oldString", "old_text", "source"),
     "new_string": ("new_str", "newString", "new_text", "target", "replacement"),
     "new_str": ("new_string", "newString", "new_text", "target", "replacement"),
+    "url": ("fetchUrl", "fetch_url", "link", "webpage", "page", "uri"),
 }
 
 

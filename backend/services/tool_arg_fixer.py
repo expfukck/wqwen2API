@@ -136,8 +136,14 @@ _PARAM_ALIASES: dict[str, dict[str, str]] = {
     "grep": {"query": "pattern", "search": "pattern"},
     "text_search": {"query": "pattern", "search": "pattern"},
     # Glob / path_find — 正确参数: pattern
-    "glob": {"path": "pattern", "dir": "path"},
-    "path_find": {"path": "pattern", "dir": "path"},
+    "glob": {"path": "pattern", "dir": "pattern"},
+    "path_find": {"path": "pattern", "dir": "pattern"},
+    # WebSearch / web_query — 正确参数: query
+    "websearch": {"q": "query", "search": "query", "search_query": "query"},
+    "web_query": {"q": "query", "search": "query", "search_query": "query"},
+    # WebFetch / http_get_url — 正确参数: url
+    "webfetch": {"link": "url", "fetch_url": "url", "webpage": "url"},
+    "http_get_url": {"link": "url", "fetch_url": "url", "webpage": "url"},
 }
 
 
