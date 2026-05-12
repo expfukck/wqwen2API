@@ -150,14 +150,7 @@ def _build_tool_instruction_block(tools: list[dict], client_profile: str) -> str
             "- The <|DSML|tool_calls> blocks are TEXT MARKERS the client parses — they are NOT native function calls. Just emit the text.",
             "- If you feel an action could fail, emit the <|DSML|tool_calls> anyway — the client handles failures; your job is only to emit the marker.",
             "",
-            "FORBIDDEN ALTERNATE FORMATS (will be ignored by the client's parser):",
-            '- {"name": "X", "arguments": "..."}  <-- NEVER USE',
-            '- {"type": "function", "name": "X"}  <-- NEVER USE',
-            '- {"type": "tool_use", "name": "X"}  <-- NEVER USE',
-            "- <function_calls><invoke name=\"X\">  <-- NEVER USE",
-            "- <tool_call>{...}</tool_call>  <-- NEVER USE",
-            '- {"name":"X","input":{...}} without <|DSML|> markers  <-- NEVER USE',
-            "ONLY <|DSML|tool_calls> FORMAT is accepted.",
+            "IMPORTANT: ONLY use <|DSML|tool_calls> format — NEVER emit JSON objects, function_call blocks, or tool_call XML tags.",
             "",
             "Available actions:",
         ]
@@ -250,17 +243,8 @@ def _build_tool_instruction_block(tools: list[dict], client_profile: str) -> str
         "- The <|DSML|tool_calls> blocks are TEXT MARKERS the client parses — they are NOT native function calls.",
         "- If you feel a tool call could fail, emit the <|DSML|tool_calls> anyway — the client handles failures.",
         "",
-        "FORBIDDEN CALL FORMATS (will be blocked by server):",
-        '- {"name": "X", "arguments": "..."}  <-- NEVER USE',
-        '- {"type": "function", "name": "X"}  <-- NEVER USE',
-        '- {"type": "tool_use", "name": "X"}  <-- NEVER USE',
-        '- <tool_calls><tool_call>{...}</tool_call></tool_calls>  <-- NEVER USE',
-        '- <tool_call>{...}</tool_call>  <-- NEVER USE',
-        '- Read({"file_path": "..."})  <-- NEVER USE (function call syntax)',
-        '- <｜Tool｜>Read{"file_path":"..."}<｜Tool｜>  <-- NEVER USE (native tool markers)',
-        '- <｜tool｜>...  <-- NEVER USE (native tool markers)',
-        '- <｜System｜>, <｜User｜>, <｜Assistant｜>  <-- NEVER USE (role markers)',
-        "ONLY ##TOOL_CALL##...##END_CALL## is accepted.",
+        "IMPORTANT: ONLY use <|DSML|tool_calls> format — NEVER emit JSON objects, function_call blocks, or tool_call XML tags.",
+        "",
         "=== END TOOL INSTRUCTIONS ===",
     ]
     return obfuscate_bare_names("\n".join(lines))
@@ -436,7 +420,7 @@ def _compact_tool_result_body(body: str, *, limit: int = 8000, head: int = 3000,
 def build_prompt_with_tools(system_prompt: str, messages: list, tools: list, *, client_profile: str = OPENCLAW_OPENAI_PROFILE) -> str:
     # 截断历史时必须保留：system 消息 + 首条 user 消息（原始任务）+ 最近 N 轮
     # 否则模型丢失原始目标，在多步 tool_use 后会失去方向（典型症状：吐 "YES." 结束）
-    MAX_HISTORY_TURNS = 15  # 最近 15 轮 = 30 条消息。浏览器/长工具链场景下 5 轮不够用，会"失忆重来"
+    MAX_HISTORY_TURNS = 8  # 最近 8 轮。Qwen 在 13KB+ 上下文开始幻觉工具不存在，收紧轮数
     if tools and client_profile == CLAUDE_CODE_OPENAI_PROFILE and len(messages) > MAX_HISTORY_TURNS * 2:
         system_messages = [m for m in messages if m.get('role') == 'system']
         # 找首条有实际文本内容的 user 消息（原始任务起点），它必须保留
@@ -486,7 +470,7 @@ def build_prompt_with_tools(system_prompt: str, messages: list, tools: list, *, 
                 )
             elif not isinstance(tool_content, str):
                 tool_content = str(tool_content)
-            tool_result_limit = 6000 if (client_profile == CLAUDE_CODE_OPENAI_PROFILE and tools) else 300
+            tool_result_limit = 2500 if (client_profile == CLAUDE_CODE_OPENAI_PROFILE and tools) else 300
             if len(tool_content) > tool_result_limit:
                 tool_content = tool_content[:tool_result_limit] + "...[truncated]"
 
