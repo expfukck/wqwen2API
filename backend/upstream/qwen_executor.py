@@ -166,8 +166,8 @@ class QwenExecutor:
                 yield evt
 
         elapsed = time.perf_counter() - started_at
-        # 检测异常短回复（通常是上游超时的信号）
-        if has_custom_tools and total_output_chars < 20 and elapsed > 5.0:
+        # 检测异常短回复（高延迟服务器：放宽到 15 秒 + 至少 5 字符）
+        if has_custom_tools and total_output_chars < 5 and elapsed > 15.0:
             log.warning(f"[上游] 异常短回复 仅 {total_output_chars} 字符 耗时 {elapsed:.1f}s — 疑似上游超时")
             raise Exception(f"Upstream timeout suspected: only {total_output_chars} chars in {elapsed:.1f}s")
 
