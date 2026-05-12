@@ -426,27 +426,32 @@ async def collect_completion_run(
 
         # 第二重：解析最终文本
         if not detected_tool_calls and request.tools and answer_text:
-            # 尝试从最终文本中解析工具调用
-            tool_blocks, stop_reason = tool_parser.parse_tool_calls_silent(answer_text, request.tools)
-            tool_use_blocks = [b for b in tool_blocks if b.get("type") == "tool_use"]
+            try:
+                # 尝试从最终文本中解析工具调用
+                tool_blocks, stop_reason = tool_parser.parse_tool_calls_silent(answer_text, request.tools)
+                tool_use_blocks = [b for b in tool_blocks if b.get("type") == "tool_use"]
 
-            if tool_use_blocks and stop_reason == "tool_use":
-                # 找到工具调用！
-                detected_tool_calls = tool_use_blocks
-                final_finish_reason = "tool_calls"
+                if tool_use_blocks and stop_reason == "tool_use":
+                    # 找到工具调用！
+                    detected_tool_calls = tool_use_blocks
+                    final_finish_reason = "tool_calls"
 
-                # 从文本中移除工具调用部分
-                text_blocks = [b for b in tool_blocks if b.get("type") == "text"]
-                if text_blocks:
-                    answer_text = text_blocks[0].get("text", "")
-                else:
-                    answer_text = ""
+                    # 从文本中移除工具调用部分
+                    text_blocks = [b for b in tool_blocks if b.get("type") == "text"]
+                    if text_blocks:
+                        answer_text = text_blocks[0].get("text", "")
+                    else:
+                        answer_text = ""
 
-                log.info(
-                    "[Collect] ✓ 最终文本解析检测到工具调用: tools=%s, cleaned_text_len=%s",
-                    [t.get("name") for t in detected_tool_calls],
-                    len(answer_text),
-                )
+                    log.info(
+                        "[Collect] ✓ 最终文本解析检测到工具调用: tools=%s, cleaned_text_len=%s",
+                        [t.get("name") for t in detected_tool_calls],
+                        len(answer_text),
+                    )
+            except Exception:
+                log.exception("[Collect] 最终文本解析异常崩溃 — 回退为纯文本")
+                detected_tool_calls = []
+                final_finish_reason = "stop"
 
         # 检查空输出
         if not detected_tool_calls and not answer_text.strip() and not reasoning_text.strip():
