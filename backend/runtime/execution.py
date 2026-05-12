@@ -392,11 +392,11 @@ async def collect_completion_run(
 
     def _finalize_result(*, reason: str | None = None) -> RuntimeExecutionResult:
         answer_text = "".join(answer_fragments)
-            reasoning_text = "".join(reasoning_fragments)
-            # 拒绝循环中断：清除碎片文本，让空响应触发重试
-            if reason == "toxic_loop_aborted":
-                answer_text = ""
-                reasoning_text = ""
+        reasoning_text = "".join(reasoning_fragments)
+        # 拒绝循环中断：清除碎片文本，让空响应触发重试
+        if reason == "toxic_loop_aborted":
+            answer_text = ""
+            reasoning_text = ""
         if native_tool_calls and not answer_text:
             answer_text = native_tool_calls_to_markup(native_tool_calls)
 
