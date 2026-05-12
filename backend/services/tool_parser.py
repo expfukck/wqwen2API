@@ -387,6 +387,10 @@ def _auto_map_param_aliases(fixed: dict, schema: dict) -> dict | None:
 
 
 def parse_tool_calls(answer: str, tools: list):
+    return _parse_tool_calls(answer, tools, emit_logs=True)
+
+
+def parse_tool_calls_silent(answer: str, tools: list):
     return _parse_tool_calls(answer, tools, emit_logs=False)
 
 
