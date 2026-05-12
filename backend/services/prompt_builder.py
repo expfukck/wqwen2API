@@ -657,6 +657,11 @@ def build_prompt_with_tools(system_prompt: str, messages: list, tools: list, *, 
     if state_notice:
         parts.append(state_notice)
 
+    # 强制工具使用：用户最新消息明确要求文件操作，注入 MUST USE 指令
+    force_notice = _build_tool_force_notice(messages, tools)
+    if force_notice:
+        parts.append(force_notice)
+
     # 工具调用熔断：会话中已有 >= 3 个工具返回了有效数据，强制模型立刻基于已有数据回复
     stop_notice = _build_stop_notice(history_parts, messages)
     if stop_notice:
@@ -725,6 +730,35 @@ def _build_state_followup_notice(messages, tools, client_profile) -> str:
         "DO NOT summarize. DO NOT explain. DO NOT ask for confirmation. DO NOT output plain text.\n"
         f"If you output anything other than a <|DSML|tool_calls> block for {to_qwen_name('Write')}/{to_qwen_name('Edit')}, the user's task FAILS."
     )
+
+
+def _build_tool_force_notice(messages: list, tools: list) -> str:
+    """用户最后一次消息明确要求文件操作（写/编辑/创建/保存），
+    但上下文里没有对应工具成功结果 → 强制 Qwen 调用工具。"""
+    if not messages or not tools:
+        return ""
+    # 找最后一条有实质内容的 user 消息
+    latest_text = ""
+    for m in reversed(messages):
+        if isinstance(m, dict) and m.get("role") == "user":
+            txt = _extract_user_text_only(m.get("content", ""), client_profile=OPENCLAW_OPENAI_PROFILE)
+            if txt.strip():
+                latest_text = txt
+                break
+    if not latest_text:
+        return ""
+    lower = latest_text.lower()
+    # 检测文件操作意图
+    force_verbs = ("写入", "写到", "写个", "写一", "创建", "生成", "新建", "保存",
+                   "修改", "编辑", "替换", "追加", "改", "删",
+                   "write", "create", "save", "edit", "modify",
+                   "append", "replace", "delete", "remove")
+    if not any(v in lower for v in force_verbs):
+        return ""
+    # 检测是否有明确文件路径
+    if ".txt" not in latest_text and ".md" not in latest_text and "桌面" not in latest_text:
+        return ""
+    return "CRITICAL: You MUST call the Write or Edit tool to complete this file operation. Do NOT just talk about it — emit a <|DSML|tool_calls> block NOW."
 
 
 def _build_stop_notice(history_parts: list[str], messages: list) -> str:
