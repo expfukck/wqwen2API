@@ -913,7 +913,38 @@ def evaluate_retry_directive(
 
     if state.blocked_tool_names and request.tools:
         if not can_retry_after_output:
-            return RuntimeRetryDirective(retry=False, next_prompt=current_prompt, reason=None)
+    # Qwen 返回了文本但没有调工具 → 把 Qwen 文本作为上下文，强制要求输出工具调用
+    if (
+        request.tools
+        and state.answer_text.strip()
+        and not state.tool_calls
+        and state.finish_reason == "stop"
+        and not state.blocked_tool_names
+        and can_retry_after_output
+    ):
+        # 检查用户最新消息是否要求文件操作
+        latest_user = ""
+        for m in reversed(history_messages or []):
+            if m.get("role") == "user":
+                latest_user = m.get("content", "") if isinstance(m.get("content"), str) else ""
+                break
+        force_verbs = ("写入", "写到", "写个", "写一", "创建", "生成", "新建", "保存",
+                       "修改", "编辑", "替换", "追加", "write", "create", "save", "edit")
+        if any(v in latest_user.lower() for v in force_verbs):
+            # 提取 Qwen 的回答，注入为上下文，强制要求工具调用
+            qwen_answer = state.answer_text.strip()[:2000]
+            force_msg = (
+                f"[INSTRUCTION]: You responded with text, but the user asked you to WRITE/EDIT a file. "
+                f"Do NOT just talk about it. You MUST emit a <|DSML|tool_calls> block with the Write or Edit tool. "
+                f"Below is the content you should write:\n\n{qwen_answer}\n\n"
+                f"Now emit ONLY a <|DSML|tool_calls> block to actually create the file."
+            )
+            return _retry(
+                "text_without_tool",
+                inject_assistant_message(current_prompt, force_msg),
+            )
+
+    return RuntimeRetryDirective(retry=False, next_prompt=current_prompt, reason=None)
         # Qwen 服务器层过滤拦截工具调用 — format_reminder 绕不过服务器层，重试无效，只试1次
         if attempt_index >= 1:
             log.warning("[重试拦截] blocked_tool_name 重试已≥1次，服务器层过滤无法绕过，停止重试")
