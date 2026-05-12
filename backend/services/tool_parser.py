@@ -229,13 +229,13 @@ def _coerce_tool_input(name: str, input_data: Any, tools: list[dict[str, Any]]) 
             fixed["prompt"] = fixed.get("description", "Execute the task")
         return fixed
 
-    # 修正 Write 工具参数
+    # 修正 Write 工具参数（Schema 要求: filePath, content）
     if name == "Write":
         fixed = dict(input_data)
-        if "file_path" not in fixed:
-            for alias in ("path", "filepath", "filePath"):
+        if "filePath" not in fixed:
+            for alias in ("file_path", "path", "filepath"):
                 if alias in fixed:
-                    fixed["file_path"] = fixed.pop(alias)
+                    fixed["filePath"] = fixed.pop(alias)
                     break
         if "content" not in fixed:
             for alias in ("file_text", "text", "data", "body"):
@@ -244,13 +244,13 @@ def _coerce_tool_input(name: str, input_data: Any, tools: list[dict[str, Any]]) 
                     break
         return fixed
 
-    # 修正 Edit 工具参数
+    # 修正 Edit 工具参数（Schema 要求: filePath, old_string, new_string）
     if name == "Edit":
         fixed = dict(input_data)
-        if "file_path" not in fixed:
-            for alias in ("path", "filepath", "filePath"):
+        if "filePath" not in fixed:
+            for alias in ("file_path", "path", "filepath"):
                 if alias in fixed:
-                    fixed["file_path"] = fixed.pop(alias)
+                    fixed["filePath"] = fixed.pop(alias)
                     break
         if "old_string" not in fixed:
             for alias in ("old_str", "oldString", "old_text"):
@@ -264,7 +264,7 @@ def _coerce_tool_input(name: str, input_data: Any, tools: list[dict[str, Any]]) 
                     break
         return fixed
 
-    # 修正 Read 工具参数
+    # 修正 Read 工具参数（Schema 要求: file_path）
     if name == "Read":
         fixed = dict(input_data)
         if "file_path" not in fixed:

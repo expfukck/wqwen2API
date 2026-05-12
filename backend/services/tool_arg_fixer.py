@@ -120,15 +120,15 @@ def fix_tool_call_arguments(tool_name: str, args: dict[str, Any]) -> dict[str, A
 
 # Qwen 常用的参数名幻觉 → 正确的参数名映射
 _PARAM_ALIASES: dict[str, dict[str, str]] = {
-    # Write / fs_put_file — 正确参数: file_path, content
-    "write": {"path": "file_path", "filepath": "file_path", "file_text": "content", "text": "content"},
-    "fs_put_file": {"path": "file_path", "filepath": "file_path", "file_text": "content", "text": "content"},
+    # Write / fs_put_file — 正确参数: filePath, content
+    "write": {"path": "filePath", "filepath": "filePath", "file_path": "filePath", "file_text": "content", "text": "content"},
+    "fs_put_file": {"path": "filePath", "filepath": "filePath", "file_path": "filePath", "file_text": "content", "text": "content"},
     # Read / fs_open_file — 正确参数: file_path
     "read": {"path": "file_path", "filepath": "file_path"},
     "fs_open_file": {"path": "file_path", "filepath": "file_path"},
-    # Edit / fs_patch_file — 正确参数: file_path, old_string, new_string
-    "edit": {"path": "file_path", "filepath": "file_path", "old_str": "old_string", "new_str": "new_string"},
-    "fs_patch_file": {"path": "file_path", "filepath": "file_path", "old_str": "old_string", "new_str": "new_string"},
+    # Edit / fs_patch_file — 正确参数: filePath, old_string, new_string
+    "edit": {"path": "filePath", "filepath": "filePath", "file_path": "filePath", "old_str": "old_string", "new_str": "new_string"},
+    "fs_patch_file": {"path": "filePath", "filepath": "filePath", "file_path": "filePath", "old_str": "old_string", "new_str": "new_string"},
     # Bash / shell_run — 正确参数: command
     "bash": {"cmd": "command", "cmdline": "command", "shell_cmd": "command"},
     "shell_run": {"cmd": "command", "cmdline": "command", "shell_cmd": "command"},
